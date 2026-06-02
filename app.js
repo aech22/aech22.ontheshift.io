@@ -125,51 +125,50 @@ function storeKey(shopId,key){return`shift_${shopId}_${key}`;}
 function makeShop(name="店舗1"){return{id:`shop_${Date.now()}`,name,createdAt:new Date().toISOString()};}
 function makePeriod(shopId){
   const yr=td.getFullYear(),mo=td.getMonth()+1,ms=String(mo).padStart(2,"0");
-  return{id:`p_${Date.now()}`,shopId,label:`${yr}年${mo}月前半`,startDate:`${yr}-${ms}-01`,endDate:`${yr}-${ms}-15`,deadlineDate:"",createdAt:new Date().toISOString()};
+  return{id:`p_${Date.now()}`,urlToken:genToken(),shopId,label:`${yr}年${mo}月前半`,startDate:`${yr}-${ms}-01`,endDate:`${yr}-${ms}-15`,deadlineDate:"",createdAt:new Date().toISOString()};
 }
 function makeSettings(shopId){
   return{shopId,password:DEFAULT_PW,candidates:CAND_WEEKDAY,weekdayCandidates:{0:CAND_WEEKEND,6:CAND_WEEKEND},dateCandidates:{},templates:[]};
 }
 
 // ===== URL生成・解析 =====
-// 形式: #/<shopIdx>/<periodId>
-// 例:   #/0/p_1749123456789
-// periodIdを直接URLに埋め込むことで1対1対応を保証
+// 形式: #/<urlToken>  例: #/a3f8x2k9
+// urlTokenはperiod作成時にランダム生成、period.urlTokenに保存
+// periodIdとは独立したランダム文字列で推測不可能
+
+function genToken(){
+  // 8文字のランダム英数字
+  const chars="abcdefghijkmnpqrstuvwxyz23456789";
+  let t="";
+  for(let i=0;i<8;i++) t+=chars[Math.floor(Math.random()*chars.length)];
+  return t;
+}
 
 function buildUrl(shops,shopId,period){
-  if(!period||!period.id)return "";
-  const idx=shops.findIndex(s=>s.id===shopId);
-  const shopIdx=idx>=0?idx:0;
-  return`${window.location.origin}${window.location.pathname}#/${shopIdx}/${period.id}`;
+  if(!period)return "";
+  const token=period.urlToken||period.id;
+  return`${window.location.origin}${window.location.pathname}#/${token}`;
 }
 
 function parseUrl(){
   const h=window.location.hash;
   if(h.startsWith("#/")){
-    const parts=h.slice(2).split("/");
-    if(parts.length>=2){
-      const shopIdx=isNaN(Number(parts[0]))?null:Number(parts[0]);
-      return{shopIdx,periodId:parts[1]};
-    }
-    if(parts.length===1&&parts[0])return{shopIdx:null,periodId:parts[0]};
+    const token=h.slice(2);
+    if(token) return{token};
   }
-  // 旧形式互換
-  if(h.startsWith("#p="))return{shopIdx:null,periodId:h.slice(3)};
+  if(h.startsWith("#p="))return{token:h.slice(3)}; // 旧形式互換
   return null;
 }
 
 // URLからshopId+periodを解決
 function resolvePeriodFromUrl(shops,allPeriods){
   const parsed=parseUrl();
-  if(!parsed||!parsed.periodId)return null;
-  const pid=parsed.periodId;
-
-  // periodIdで直接検索（確実・高速）
-  const found=allPeriods.find(p=>p.id===pid);
+  if(!parsed||!parsed.token)return null;
+  const token=parsed.token;
+  // urlToken または id で検索（旧形式互換）
+  const found=allPeriods.find(p=>p.urlToken===token||p.id===token);
   if(found){
-    // shopIdxでshopを特定、なければfound.shopIdを使用
-    let shopId=found.shopId||shops[0]?.id;
-    if(parsed.shopIdx!=null&&shops[parsed.shopIdx]) shopId=shops[parsed.shopIdx].id;
+    const shopId=found.shopId||shops[0]?.id;
     return{period:found,shopId};
   }
   return null;
@@ -346,8 +345,8 @@ function App(){
     return()=>{ console.log("Phase2: 購読解除 sid=",sid); refs.forEach(r=>r.off()); };
   },[ready,sid]);
 
-  // URLにperiodIdが含まれるか（スタッフ専用モード判定）
-  const [urlLocked]=useState(()=>{ const p=parseUrl(); return !!(p&&p.periodId); });
+  // URLにtokenが含まれるか（スタッフ専用モード・期間固定）
+  const [urlLocked]=useState(()=>{ const p=parseUrl(); return !!(p&&p.token); });
 
   // ===================================================================
   // Phase3: periods確定後にURL解決・apid初期化
@@ -363,26 +362,20 @@ function App(){
       return;
     }
 
-    // shopIdxでshop切り替え（shopが変わったらperiods更新を待つ）
-    if(parsed.shopIdx!=null&&shops.length>parsed.shopIdx){
-      const ts=shops[parsed.shopIdx];
-      if(ts&&ts.id!==sid){ setCurrentShopId(ts.id); return; }
-    }
+    // token方式ではshopIdx不要（resolvePeriodFromUrlが店舗を自動解決）
 
-    // periodIdでperiod解決（periodsが届くまで待機）
-    if(parsed.periodId){
+    // tokenでperiod解決（periodsが届くまで待機）
+    if(parsed.token){
       if(periods.length===0)return; // まだperiods未着 → 待機
       const r=resolvePeriodFromUrl(shops,periods);
       if(r){
         setApid(r.period.id);
-        // shopIdが違う場合は店舗も切り替え
         if(r.shopId&&r.shopId!==sid)setCurrentShopId(r.shopId);
         setView("staff");
         setUrlResolved(true);
         return;
       }
-      // periodId一致なし → デバッグログ出力
-      console.warn("periodId一致なし:", parsed.periodId, "利用可能なperiodId:", periods.map(p=>p.id));
+      console.warn("token一致なし:", parsed.token);
       if(!apid&&periods.length>0) setApid(periods[0].id);
       setView("staff");
       setUrlResolved(true);
@@ -1020,7 +1013,7 @@ function PeriodsTab({periods,subs,staffList,shops,onSave,tt,shopId,shopName}){
   ];
   const create=()=>{
     if(!form.startDate||!form.endDate){tt("⚠️ 開始日・終了日を入力");return;}
-    const p={id:`p_${Date.now()}`,shopId,label:form.label||`${form.startDate.replace(/-/g,"/")}〜${form.endDate.replace(/-/g,"/")}`,startDate:form.startDate,endDate:form.endDate,deadlineDate:form.deadlineDate,createdAt:new Date().toISOString()};
+    const p={id:`p_${Date.now()}`,urlToken:genToken(),shopId,label:form.label||`${form.startDate.replace(/-/g,"/")}〜${form.endDate.replace(/-/g,"/")}`,startDate:form.startDate,endDate:form.endDate,deadlineDate:form.deadlineDate,createdAt:new Date().toISOString()};
     onSave([...periods,p]);setForm({label:"",startDate:"",endDate:"",deadlineDate:""});setShow(false);tt("✅ 期間を作成しました");
   };
 
@@ -1158,11 +1151,14 @@ function expXl(p,subs,staffList,tt,shopName){
     right:right?thinLine:undefined
   });
 
-  // セルへの書き込みヘルパー
+  // セルへの書き込みヘルパー（デフォルトで中央揃え）
+  const CA={horizontal:"center",vertical:"center",wrapText:false};
   const setCell=(ws,r,c,v,s)=>{
     const ref=XLSX.utils.encode_cell({r,c});
     const t=(typeof v==="number")?"n":"s";
-    ws[ref]={v:v===""||v===undefined||v===null?"":v,t,s:s||{}};
+    const base={alignment:CA};
+    const merged=s?{...base,...s,alignment:{...CA,...(s.alignment||{})}}:base;
+    ws[ref]={v:v===""||v===undefined||v===null?"":v,t,s:merged};
   };
 
   // シート範囲計算
