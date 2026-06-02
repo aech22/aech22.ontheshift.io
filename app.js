@@ -367,28 +367,49 @@ function App(){
     return()=>{ console.log("Phase2: 購読解除 sid=",sid); refs.forEach(r=>r.off()); };
   },[ready,sid]);
 
+  // URLにslugが含まれるか（スタッフ専用モード判定）
+  const urlParsed=parseUrl();
+  const urlLocked=!!(urlParsed&&urlParsed.slug);
+
   // ===================================================================
   // Phase3: periods確定後にURL解決・apid初期化
   // ===================================================================
   useEffect(()=>{
     if(!ready||urlResolved)return;
     const parsed=parseUrl();
+
+    // URLなし → 通常モード（管理者画面も使える）
     if(!parsed){
-      if(periods.length>0){ if(!apid)setApid(periods[0].id); setUrlResolved(true); }
+      if(periods.length>0){ if(!apid)setApid(periods[0].id); }
+      setUrlResolved(true);
       return;
     }
-    // shopIdxでshop切り替え
+
+    // shopIdxでshop切り替え（shopが変わったらperiods更新を待つ）
     if(parsed.shopIdx!=null&&shops.length>parsed.shopIdx){
       const ts=shops[parsed.shopIdx];
       if(ts&&ts.id!==sid){ setCurrentShopId(ts.id); return; }
     }
-    // slugでperiod解決
-    if(parsed.slug&&periods.length>0){
+
+    // slugでperiod解決（periodsが届くまで待機）
+    if(parsed.slug){
+      if(periods.length===0)return; // まだperiods未着 → 待機
       const r=resolvePeriodFromUrl(shops,periods);
-      if(r){ setApid(r.period.id); setView("staff"); setUrlResolved(true); return; }
+      if(r){
+        setApid(r.period.id);
+        setView("staff"); // 必ずスタッフ画面
+        setUrlResolved(true);
+        return;
+      }
+      // slug一致なし（期間が存在しない）→ 最初のperiodを使用
+      if(!apid&&periods.length>0) setApid(periods[0].id);
+      setView("staff");
+      setUrlResolved(true);
+      return;
     }
-    // periods待ち
-    if(periods.length>0){ if(!apid)setApid(periods[0].id); setUrlResolved(true); }
+
+    if(!apid&&periods.length>0) setApid(periods[0].id);
+    setUrlResolved(true);
   },[ready,shops,periods,urlResolved,sid,apid]);
 
   // periodsが来たらapidを設定
@@ -456,13 +477,15 @@ Firebase SDKが読み込まれていません");return;}
 "+e.message));
         }} style={{background:"rgba(255,255,255,.25)",border:"none",borderRadius:6,padding:"2px 8px",color:"white",fontSize:11,fontWeight:700,cursor:"pointer"}}>🔍 テスト</button>
       </div>}
-      {/* タブ */}
-      <div style={{display:"flex",position:"sticky",top:0,zIndex:100,boxShadow:"0 2px 8px rgba(0,0,0,.15)"}}>
+      {/* タブ: URLロック時はスタッフ画面のみ表示 */}
+      {!urlLocked&&<div style={{display:"flex",position:"sticky",top:0,zIndex:100,boxShadow:"0 2px 8px rgba(0,0,0,.15)"}}>
         <button onClick={()=>setView("staff")} style={{flex:1,padding:"13px 0",border:"none",cursor:"pointer",fontSize:14,fontWeight:700,background:view==="staff"?"#06C755":"#1A1A2E",color:"white"}}>📅 スタッフ画面</button>
         <button onClick={()=>setView("admin")} style={{flex:1,padding:"13px 0",border:"none",cursor:"pointer",fontSize:14,fontWeight:700,background:view==="admin"?"#16213E":"#111827",color:"white"}}>⚙️ 管理者画面</button>
-      </div>
-      {view==="staff"
+      </div>}
+      {/* URLロック時は常にスタッフ画面 */}
+      {urlLocked||view==="staff"
         ?<StaffView periods={periods} ap={ap} apid={apid} setApid={setApid} shopId={sid} settings={effectiveSettings} subs={subs} staffList={staffList}
+            urlLocked={urlLocked}
             onSub={sub=>{
               const a=[...subs];const i=a.findIndex(s=>s.staffName===sub.staffName&&s.periodId===sub.periodId);
               if(i>=0)a[i]=sub;else a.push(sub);saveSubs(a);
@@ -481,7 +504,7 @@ Firebase SDKが読み込まれていません");return;}
 // ============================================================
 // スタッフ画面
 // ============================================================
-function StaffView({periods,ap,apid,setApid,shopId,settings,subs,staffList,onSub,shopName}){
+function StaffView({periods,ap,apid,setApid,shopId,settings,subs,staffList,onSub,shopName,urlLocked=false}){
   const[name,setName]=useState("");
   const[sd,setSd]=useState({});
   const[done,setDone]=useState(false);
