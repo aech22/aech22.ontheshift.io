@@ -255,13 +255,19 @@ function App(){
       let sh;
       if(val){
         // Firebaseにデータあり → そのまま使う（端末間でIDを統一）
-        sh=Array.isArray(val)?val.filter(Boolean):Object.values(val);
+        if(typeof val==="object"&&!Array.isArray(val)){
+          sh=Object.values(val).filter(s=>s&&s.id);
+        } else {
+          sh=(Array.isArray(val)?val:Object.values(val)).filter(s=>s&&s.id);
+        }
         console.log("Firebase shops取得:", sh.length,"件");
       } else {
         // Firebaseにデータなし → localまたは新規作成してFirebaseに書く
         const local=lg("shift_shops_v6",null);
         sh=local&&local.length>0?local:[makeShop("メイン店舗")];
-        firebaseDB.ref("global/shops").set(sh);
+        const shObj={};
+        sh.forEach(s=>{ if(s&&s.id) shObj[s.id]=s; });
+        firebaseDB.ref("global/shops").set(shObj);
         console.log("Firebase shops新規作成:", sh.length,"件");
       }
       setShops(sh);
@@ -296,7 +302,12 @@ function App(){
     // global/shops をリアルタイム購読（店舗追加・変更を全端末に反映）
     on("global/shops",val=>{
       if(!val)return;
-      const arr=Array.isArray(val)?val.filter(Boolean):Object.values(val);
+      let arr;
+      if(typeof val==="object"&&!Array.isArray(val)){
+        arr=Object.values(val).filter(s=>s&&s.id);
+      } else {
+        arr=(Array.isArray(val)?val:Object.values(val)).filter(s=>s&&s.id);
+      }
       if(arr.length>0){ setShops(arr); ls("shift_shops_v6",arr); }
     });
 
@@ -306,16 +317,46 @@ function App(){
       else{ const def=makeSettings(sid); setSettings(def); }
     });
     on(fbPath(sid,"periods"),val=>{
-      const arr=val?(Array.isArray(val)?val.filter(Boolean):Object.values(val)):[];
-      setPeriods(arr); ls(storeKey(sid,"periods_v6"),arr);
+      if(!val){ return; }
+      let arr;
+      if(typeof val==="object"&&!Array.isArray(val)){
+        arr=Object.values(val).filter(p=>p&&p.id);
+      } else {
+        arr=(Array.isArray(val)?val:Object.values(val)).filter(p=>p&&p.id);
+      }
+      if(arr.length>0){
+        arr.sort((a,b)=>new Date(b.createdAt||0)-new Date(a.createdAt||0));
+        setPeriods(arr); ls(storeKey(sid,"periods_v6"),arr);
+      }
     });
     on(fbPath(sid,"staff"),val=>{
-      const arr=val?(Array.isArray(val)?val.filter(Boolean):Object.values(val)):[];
+      if(!val){ setStaffList([]); return; }
+      // staffは文字列配列
+      let arr;
+      if(Array.isArray(val)){
+        arr=val.filter(s=>s&&typeof s==="string");
+      } else if(typeof val==="object"){
+        // Firebaseが {0:"田中",1:"山田"} 形式で返した場合
+        arr=Object.values(val).filter(s=>s&&typeof s==="string");
+      } else {
+        arr=[];
+      }
       setStaffList(arr); ls(storeKey(sid,"staff_v6"),arr);
     });
     on(fbPath(sid,"subs"),val=>{
-      const arr=val?(Array.isArray(val)?val.filter(Boolean):Object.values(val)):[];
-      setSubs(arr); ls(storeKey(sid,"subs_v6"),arr);
+      if(!val){ setSubs([]); ls(storeKey(sid,"subs_v6"),[]); return; }
+      // Firebase から {id: sub} 形式で返る → 配列に変換
+      let arr;
+      if(typeof val==="object"&&!Array.isArray(val)){
+        arr=Object.values(val).filter(s=>s&&s.id);
+      } else {
+        arr=(Array.isArray(val)?val:Object.values(val)).filter(s=>s&&s.id);
+      }
+      // submittedAt で降順ソート
+      arr.sort((a,b)=>new Date(b.submittedAt)-new Date(a.submittedAt));
+      setSubs(arr);
+      ls(storeKey(sid,"subs_v6"),arr);
+      console.log("subs受信:", arr.length,"件");
     });
 
     // settingsがFirebaseにない場合デフォルトを書き込む
@@ -358,10 +399,35 @@ function App(){
   // ===================================================================
   const fbW=(path,val)=>{ if(firebaseDB) firebaseDB.ref(path).set(val).catch(e=>console.warn("書き込み失敗:",path,e)); };
   const saveSettings=useCallback(v=>{ setSettings(v); ls(storeKey(sid,"settings_v6"),v); fbW(fbPath(sid,"settings"),v); },[sid]);
-  const savePeriods =useCallback(v=>{ setPeriods(v);  ls(storeKey(sid,"periods_v6"),v);  fbW(fbPath(sid,"periods"),v);  },[sid]);
+  const savePeriods =useCallback(v=>{
+    setPeriods(v);
+    ls(storeKey(sid,"periods_v6"),v);
+    if(firebaseDB){
+      const obj={};
+      v.forEach(p=>{ if(p&&p.id) obj[p.id]=p; });
+      firebaseDB.ref(fbPath(sid,"periods")).set(obj).catch(e=>console.warn("periods書き込み失敗:",e));
+    }
+  },[sid]);
   const saveStaff   =useCallback(v=>{ setStaffList(v);ls(storeKey(sid,"staff_v6"),v);    fbW(fbPath(sid,"staff"),v);    },[sid]);
-  const saveSubs    =useCallback(v=>{ setSubs(v);      ls(storeKey(sid,"subs_v6"),v);     fbW(fbPath(sid,"subs"),v);     },[sid]);
-  const saveShops   =useCallback(v=>{ setShops(v);     ls("shift_shops_v6",v);            fbW("global/shops",v);         },[]);
+  const saveSubs    =useCallback(v=>{
+    setSubs(v);
+    ls(storeKey(sid,"subs_v6"),v);
+    // Firebase には {id: sub} のオブジェクト形式で保存（配列はNG）
+    if(firebaseDB){
+      const obj={};
+      v.forEach(s=>{ if(s&&s.id) obj[s.id]=s; });
+      firebaseDB.ref(fbPath(sid,"subs")).set(obj).catch(e=>console.warn("subs書き込み失敗:",e));
+    }
+  },[sid]);
+  const saveShops   =useCallback(v=>{
+    setShops(v);
+    ls("shift_shops_v6",v);
+    if(firebaseDB){
+      const obj={};
+      v.forEach(s=>{ if(s&&s.id) obj[s.id]=s; });
+      firebaseDB.ref("global/shops").set(obj).catch(e=>console.warn("shops書き込み失敗:",e));
+    }
+  },[]);
 
   const ap=periods.find(p=>p.id===apid)||periods[0];
   const effectiveSettings=settings||makeSettings(sid);
