@@ -368,8 +368,8 @@ function App(){
   },[ready,sid]);
 
   // URLにslugが含まれるか（スタッフ専用モード判定）
-  const urlParsed=parseUrl();
-  const urlLocked=!!(urlParsed&&urlParsed.slug);
+  // readyになる前でも計算可能（window.location.hashは常に存在）
+  const [urlLocked]=useState(()=>{ const p=parseUrl(); return !!(p&&p.slug); });
 
   // ===================================================================
   // Phase3: periods確定後にURL解決・apid初期化
@@ -453,8 +453,8 @@ function App(){
   const ap=periods.find(p=>p.id===apid)||periods[0];
   const effectiveSettings=settings||makeSettings(sid);
 
-  // ローディング画面（Phase1完了まで）
-  if(!ready) return(
+  // ローディング画面（Phase1完了まで、またはURLモードでperiodsが届くまで）
+  if(!ready||(urlLocked&&periods.length===0)) return(
     <div style={{display:"flex",alignItems:"center",justifyContent:"center",minHeight:"100vh",background:"#1A1A2E",flexDirection:"column",gap:16}}>
       <div style={{fontSize:40}}>📅</div>
       <div style={{color:"white",fontSize:16,fontWeight:700}}>シフト管理システム</div>
@@ -468,13 +468,10 @@ function App(){
       {syncStatus!=="online"&&<div style={{background:syncStatus==="offline"?"#F59E0B":"#6B7280",color:"white",fontSize:11,fontWeight:700,textAlign:"center",padding:"4px 8px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
         <span>{syncStatus==="offline"?"🟡 オフライン（再接続中...）":syncStatus==="no_config"?"⚙️ Firebase未設定":"⏳ 接続中..."}</span>
         <button onClick={()=>{
-          if(!firebaseDB){alert("firebaseDB=null
-Firebase SDKが読み込まれていません");return;}
+          if(!firebaseDB){alert("firebaseDB=null\nFirebase SDKが読み込まれていません");return;}
           firebaseDB.ref("debug_test").set({t:Date.now(),msg:"接続テスト"})
-            .then(()=>alert("✅ Firebase書き込み成功！
-同期は正常です"))
-            .catch(e=>alert("❌ Firebase書き込み失敗:
-"+e.message));
+            .then(()=>alert("✅ Firebase書き込み成功！\n同期は正常です"))
+            .catch(e=>alert("❌ Firebase書き込み失敗:\n"+e.message));
         }} style={{background:"rgba(255,255,255,.25)",border:"none",borderRadius:6,padding:"2px 8px",color:"white",fontSize:11,fontWeight:700,cursor:"pointer"}}>🔍 テスト</button>
       </div>}
       {/* タブ: URLロック時はスタッフ画面のみ表示 */}
@@ -482,20 +479,20 @@ Firebase SDKが読み込まれていません");return;}
         <button onClick={()=>setView("staff")} style={{flex:1,padding:"13px 0",border:"none",cursor:"pointer",fontSize:14,fontWeight:700,background:view==="staff"?"#06C755":"#1A1A2E",color:"white"}}>📅 スタッフ画面</button>
         <button onClick={()=>setView("admin")} style={{flex:1,padding:"13px 0",border:"none",cursor:"pointer",fontSize:14,fontWeight:700,background:view==="admin"?"#16213E":"#111827",color:"white"}}>⚙️ 管理者画面</button>
       </div>}
-      {/* URLロック時は常にスタッフ画面 */}
-      {urlLocked||view==="staff"
+      {/* メインコンテンツ */}
+      {(urlLocked||view==="staff")
         ?<StaffView periods={periods} ap={ap} apid={apid} setApid={setApid} shopId={sid} settings={effectiveSettings} subs={subs} staffList={staffList}
             urlLocked={urlLocked}
             onSub={sub=>{
               const a=[...subs];const i=a.findIndex(s=>s.staffName===sub.staffName&&s.periodId===sub.periodId);
               if(i>=0)a[i]=sub;else a.push(sub);saveSubs(a);
             }} shopName={shop?.name}/>
-        :auth
+        :(auth
           ?<AdminView settings={effectiveSettings} periods={periods} subs={subs} staffList={staffList} shops={shops}
               currentShopId={sid} saveSettings={saveSettings} savePeriods={savePeriods} saveSubs={saveSubs}
               saveStaff={saveStaff} saveShops={saveShops} setCurrentShopId={id=>setCurrentShopId(id)}
               logout={()=>setAuth(false)} syncStatus={syncStatus}/>
-          :<AdminLogin settings={effectiveSettings} onAuth={()=>setAuth(true)}/>
+          :<AdminLogin settings={effectiveSettings} onAuth={()=>setAuth(true)}/>)
       }
     </div>
   );
