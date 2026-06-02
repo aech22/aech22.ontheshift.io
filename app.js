@@ -569,7 +569,7 @@ function StaffView({periods,ap,apid,setApid,shopId,settings,subs,staffList,onSub
 
   if(done)return(
     <div style={{background:"#F0F2F5",minHeight:"calc(100vh - 44px)"}}>
-      <StaffHdr ap={ap} p0={p0} pe={pe} nd={dates.length} subs={subs} apid={apid} onSm={()=>setSm(true)} shopName={shopName} periods={periods} onChangePeriod={id=>{setApid(id);const p=periods.find(pp=>pp.id===id);if(p){const i={};gd(p.startDate,p.endDate).forEach(d=>{i[d]={status:"holiday"};});setSd(i);setDone(false);setComment("");setUrl(shops,shopId,p);}}}/>
+      <StaffHdr ap={ap} p0={p0} pe={pe} nd={dates.length} subs={subs} apid={apid} onSm={()=>setSm(true)} shopName={shopName}/>
       {sm&&<SmModal subs={subs} periods={periods} apid={apid} onClose={()=>setSm(false)} staffList={staffList} onEditSub={sub=>{onSub(sub);}} onEditByName={sub=>{setName(sub.staffName);const init={};const ds2=ap?gd(ap.startDate,ap.endDate):[];ds2.forEach(d=>{init[d]=(sub.shifts||{})[d]||{status:"holiday"};});setSd(init);setComment(sub.comment||"");setDone(false);}}/>}
       <div style={{maxWidth:560,margin:"0 auto",padding:"50px 20px",textAlign:"center"}}>
         <div style={{fontSize:68,animation:"bI .5s"}}>✅</div>
@@ -590,7 +590,7 @@ function StaffView({periods,ap,apid,setApid,shopId,settings,subs,staffList,onSub
 
   return(
     <div style={{background:"#F0F2F5",minHeight:"calc(100vh - 44px)"}}>
-      <StaffHdr ap={ap} p0={p0} pe={pe} nd={dates.length} subs={subs} apid={apid} onSm={()=>setSm(true)} shopName={shopName} periods={periods} onChangePeriod={id=>{setApid(id);const p=periods.find(pp=>pp.id===id);if(p){const i={};gd(p.startDate,p.endDate).forEach(d=>{i[d]={status:"holiday"};});setSd(i);setDone(false);setComment("");setUrl(shops,shopId,p);}}}/>
+      <StaffHdr ap={ap} p0={p0} pe={pe} nd={dates.length} subs={subs} apid={apid} onSm={()=>setSm(true)} shopName={shopName}/>
       {sm&&<SmModal subs={subs} periods={periods} apid={apid} onClose={()=>setSm(false)} staffList={staffList} onEditSub={sub=>{onSub(sub);}} onEditByName={sub=>{setName(sub.staffName);const init={};const ds2=ap?gd(ap.startDate,ap.endDate):[];ds2.forEach(d=>{init[d]=(sub.shifts||{})[d]||{status:"holiday"};});setSd(init);setComment(sub.comment||"");setDone(false);}}/>}
       <div style={{maxWidth:560,margin:"0 auto",padding:"14px 12px 120px"}}>
         {ap?.deadlineDate&&<div style={{background:dl?"#FFF0F1":"#FFFBEB",border:`1px solid ${dl?"#FF4757":"#FCD34D"}`,borderRadius:10,padding:"10px 14px",marginBottom:12,fontSize:13,fontWeight:700,color:dl?"#FF4757":"#92400E"}}>{dl?`⚠️ 締切済み（${ap.deadlineDate.replace(/-/g,"/")}）`:`📅 締切日：${ap.deadlineDate.replace(/-/g,"/")}`}</div>}
@@ -742,44 +742,21 @@ function StaffView({periods,ap,apid,setApid,shopId,settings,subs,staffList,onSub
 }
 
 // ===== スタッフヘッダー =====
-function StaffHdr({ap,p0,pe,nd,subs,apid,onSm,shopName,periods,onChangePeriod,urlLocked}){
+function StaffHdr({ap,p0,pe,nd,subs,apid,onSm,shopName}){
   const submitted=subs.filter(s=>s.periodId===apid);
-  const[periodMenu,setPeriodMenu]=useState(false);
-  const menuRef=useRef();
-  useEffect(()=>{
-    const h=e=>{if(menuRef.current&&!menuRef.current.contains(e.target))setPeriodMenu(false);};
-    document.addEventListener("mousedown",h);return()=>document.removeEventListener("mousedown",h);
-  },[]);
   return(
     <div style={{background:"#06C755",boxShadow:"0 2px 12px rgba(6,199,85,.25)",padding:"12px 14px"}}>
       <div style={{maxWidth:560,margin:"0 auto",display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}>
-        <div style={{display:"flex",alignItems:"center",gap:8,flex:1,minWidth:0}} ref={menuRef}>
+        <div style={{display:"flex",alignItems:"center",gap:8,flex:1,minWidth:0}}>
           <span style={{fontSize:20,flexShrink:0}}>📅</span>
-          <div style={{minWidth:0,position:"relative"}}>
+          <div style={{minWidth:0}}>
             <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
               {shopName&&<span style={{fontSize:11,background:"rgba(255,255,255,.25)",color:"white",padding:"1px 7px",borderRadius:10,fontWeight:700,whiteSpace:"nowrap"}}>{shopName}</span>}
-              {/* プロジェクト名クリックでプロジェクト切り替えメニュー */}
-              <button onClick={()=>!urlLocked&&periods&&periods.length>1&&setPeriodMenu(v=>!v)}
-                style={{fontSize:15,fontWeight:700,color:"white",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",background:"none",border:"none",cursor:(!urlLocked&&periods&&periods.length>1)?"pointer":"default",padding:0,display:"flex",alignItems:"center",gap:4}}>
+              <div style={{fontSize:15,fontWeight:700,color:"white",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
                 {ap?.label||"シフト希望提出"}
-                {!urlLocked&&periods&&periods.length>1&&<span style={{fontSize:11,opacity:.75}}>▼</span>}
-              </button>
+              </div>
             </div>
             <div style={{fontSize:11,color:"rgba(255,255,255,.85)",marginTop:1}}>{p0} 〜 {pe}（{nd}日間）</div>
-            {/* プロジェクト切り替えメニュー */}
-            {periodMenu&&periods&&periods.length>1&&(
-              <div style={{position:"absolute",top:"100%",left:0,background:"white",borderRadius:12,boxShadow:"0 8px 24px rgba(0,0,0,.2)",zIndex:200,minWidth:200,marginTop:6,overflow:"hidden"}}>
-                {[...periods].sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt)).map(p=>(
-                  <div key={p.id} onClick={()=>{onChangePeriod&&onChangePeriod(p.id);setPeriodMenu(false);}}
-                    style={{padding:"11px 16px",cursor:"pointer",fontSize:14,fontWeight:p.id===apid?700:400,color:p.id===apid?"#06C755":"#1A1A2E",background:p.id===apid?"#E8F9EE":"white",display:"flex",alignItems:"center",gap:8}}
-                    onMouseEnter={e=>e.currentTarget.style.background=p.id===apid?"#E8F9EE":"#F9FAFB"}
-                    onMouseLeave={e=>e.currentTarget.style.background=p.id===apid?"#E8F9EE":"white"}>
-                    {p.id===apid&&<span style={{fontSize:10}}>✓</span>}{p.label}
-                    <span style={{fontSize:11,color:"#9CA3AF",marginLeft:"auto"}}>{p.startDate?.replace(/-/g,"/").slice(5)}〜{p.endDate?.replace(/-/g,"/").slice(5)}</span>
-                  </div>
-                ))}
-              </div>
-            )}
           </div>
         </div>
         <button onClick={onSm} style={{flexShrink:0,background:"rgba(255,255,255,.18)",border:"1px solid rgba(255,255,255,.4)",borderRadius:20,padding:"7px 14px",color:"white",fontSize:13,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",gap:6,whiteSpace:"nowrap"}}>
