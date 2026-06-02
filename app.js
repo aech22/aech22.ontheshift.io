@@ -296,9 +296,20 @@ function App(){
         ls(storeKey(sid,"subs_v6"),[]);
         return;
       }
-      const arr=Array.isArray(val)?val.filter(Boolean):Object.values(val);
-      setSubs(arr);
-      ls(storeKey(sid,"subs_v6"),arr);
+      // Firebase はオブジェクト or 配列で返る → 正規化
+      const rawArr=Array.isArray(val)?val.filter(Boolean):Object.values(val);
+      // shiftsも同様に正規化（Firebase がオブジェクトで返す場合がある）
+      const normalized=rawArr.map(sub=>{
+        if(!sub||typeof sub!=="object")return sub;
+        // shiftsが存在する場合、各エントリを確認
+        if(sub.shifts&&typeof sub.shifts==="object"&&!Array.isArray(sub.shifts)){
+          // shiftsは {dateStr: {status,start,end}} 形式のまま使えるのでそのまま
+          return sub;
+        }
+        return sub;
+      });
+      setSubs(normalized);
+      ls(storeKey(sid,"subs_v6"),normalized);
     }));
 
     return()=>{
@@ -456,7 +467,7 @@ function StaffView({periods,ap,apid,setApid,shopId,settings,subs,staffList,onSub
   if(done)return(
     <div style={{background:"#F0F2F5",minHeight:"calc(100vh - 44px)"}}>
       <StaffHdr ap={ap} p0={p0} pe={pe} nd={dates.length} subs={subs} apid={apid} onSm={()=>setSm(true)} shopName={shopName} periods={periods} onChangePeriod={id=>{setApid(id);const p=periods.find(pp=>pp.id===id);if(p){const i={};gd(p.startDate,p.endDate).forEach(d=>{i[d]={status:"holiday"};});setSd(i);setDone(false);setComment("");setUrl(shopId,p);}}}/>
-      {sm&&<SmModal subs={subs} periods={periods} apid={apid} onClose={()=>setSm(false)} staffList={staffList} onEditSub={sub=>{onSub(sub);}}/>}
+      {sm&&<SmModal subs={subs} periods={periods} apid={apid} onClose={()=>setSm(false)} staffList={staffList} onEditSub={sub=>{onSub(sub);}} onEditByName={sub=>{setName(sub.staffName);const init={};const ds2=ap?gd(ap.startDate,ap.endDate):[];ds2.forEach(d=>{init[d]=(sub.shifts||{})[d]||{status:"holiday"};});setSd(init);setComment(sub.comment||"");setDone(false);}}/>}
       <div style={{maxWidth:560,margin:"0 auto",padding:"50px 20px",textAlign:"center"}}>
         <div style={{fontSize:68,animation:"bI .5s"}}>✅</div>
         <div style={{fontSize:22,fontWeight:700,color:"#05A847",marginTop:14,marginBottom:8}}>提出完了！</div>
@@ -477,7 +488,7 @@ function StaffView({periods,ap,apid,setApid,shopId,settings,subs,staffList,onSub
   return(
     <div style={{background:"#F0F2F5",minHeight:"calc(100vh - 44px)"}}>
       <StaffHdr ap={ap} p0={p0} pe={pe} nd={dates.length} subs={subs} apid={apid} onSm={()=>setSm(true)} shopName={shopName} periods={periods} onChangePeriod={id=>{setApid(id);const p=periods.find(pp=>pp.id===id);if(p){const i={};gd(p.startDate,p.endDate).forEach(d=>{i[d]={status:"holiday"};});setSd(i);setDone(false);setComment("");setUrl(shopId,p);}}}/>
-      {sm&&<SmModal subs={subs} periods={periods} apid={apid} onClose={()=>setSm(false)} staffList={staffList} onEditSub={sub=>{onSub(sub);}}/>}
+      {sm&&<SmModal subs={subs} periods={periods} apid={apid} onClose={()=>setSm(false)} staffList={staffList} onEditSub={sub=>{onSub(sub);}} onEditByName={sub=>{setName(sub.staffName);const init={};const ds2=ap?gd(ap.startDate,ap.endDate):[];ds2.forEach(d=>{init[d]=(sub.shifts||{})[d]||{status:"holiday"};});setSd(init);setComment(sub.comment||"");setDone(false);}}/>}
       <div style={{maxWidth:560,margin:"0 auto",padding:"14px 12px 120px"}}>
         {ap?.deadlineDate&&<div style={{background:dl?"#FFF0F1":"#FFFBEB",border:`1px solid ${dl?"#FF4757":"#FCD34D"}`,borderRadius:10,padding:"10px 14px",marginBottom:12,fontSize:13,fontWeight:700,color:dl?"#FF4757":"#92400E"}}>{dl?`⚠️ 締切済み（${ap.deadlineDate.replace(/-/g,"/")}）`:`📅 締切日：${ap.deadlineDate.replace(/-/g,"/")}`}</div>}
 
@@ -691,7 +702,8 @@ function SmModal({subs,periods,apid,onClose,staffList,onEditSub,onEditByName}){
   const handleCellClick=(sub,ds)=>{if(!sub)return;setEditTarget({subId:sub.id,ds});};
   const applyCellEdit=(subId,ds,newStatus,newStart,newEnd)=>{
     const sub=submitted.find(s=>s.id===subId);if(!sub)return;
-    onEditSub({...sub,shifts:{...sub.shifts,[ds]:{status:newStatus,start:newStart,end:newEnd}}});
+    const shifts={...(sub.shifts||{}),[ds]:{status:newStatus,start:newStart,end:newEnd}};
+    onEditSub({...sub,shifts});
     setEditTarget(null);
   };
   // 名前クリック→ホーム画面で修正
@@ -747,7 +759,10 @@ function SmModal({subs,periods,apid,onClose,staffList,onEditSub,onEditByName}){
             {submitted.map((sub,ri)=>(
               <div key={sub.id} style={{display:"flex",background:"white",flexShrink:0,borderBottom:"1px solid #E5E7EB"}}>
                 {dates.map(ds=>{
-                  const s=sub.shifts?.[ds],iw=s?.status==="work";
+                  // shiftsのデータ取得（Firebase経由でも確実に取得）
+                  const rawShifts=sub.shifts||{};
+                  const s=rawShifts[ds]||null;
+                  const iw=s&&s.status==="work";
                   const isEditing=editTarget&&editTarget.subId===sub.id&&editTarget.ds===ds;
                   return(
                     <div key={ds} onClick={()=>handleCellClick(sub,ds)}
@@ -756,9 +771,9 @@ function SmModal({subs,periods,apid,onClose,staffList,onEditSub,onEditByName}){
                       onMouseLeave={e=>{if(!isEditing)e.currentTarget.style.background="white";}}>
                       {iw?(<>
                         <div style={{fontSize:11,fontWeight:700,background:"#E8F9EE",color:"#15803D",padding:"2px 6px",borderRadius:4,border:"1px solid #C2F0D2",whiteSpace:"nowrap"}}>出勤</div>
-                        <div style={{fontSize:12,fontWeight:700,color:"#1A1A2E",whiteSpace:"nowrap"}}>{s.start}</div>
+                        <div style={{fontSize:12,fontWeight:700,color:"#1A1A2E",whiteSpace:"nowrap"}}>{s.start||"--:--"}</div>
                         <div style={{fontSize:10,color:"#9CA3AF"}}>〜</div>
-                        <div style={{fontSize:12,fontWeight:700,color:"#1A1A2E",whiteSpace:"nowrap"}}>{s.end}</div>
+                        <div style={{fontSize:12,fontWeight:700,color:"#1A1A2E",whiteSpace:"nowrap"}}>{s.end||"--:--"}</div>
                       </>):(<div style={{fontSize:14,color:"#C4C4C4"}}>🌙</div>)}
                     </div>
                   );
@@ -773,7 +788,7 @@ function SmModal({subs,periods,apid,onClose,staffList,onEditSub,onEditByName}){
       }
       {editTarget&&(()=>{
         const sub=submitted.find(s=>s.id===editTarget.subId);
-        const s=sub?.shifts?.[editTarget.ds]||{status:"holiday"};
+        const s=(sub?.shifts||{})[editTarget.ds]||{status:"holiday"};
         const d=pd(editTarget.ds);
         return(
           <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.4)",zIndex:400,display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={()=>setEditTarget(null)}>
