@@ -132,57 +132,66 @@ function makeSettings(shopId){
 }
 
 // ===== URL スラッグ生成 =====
-// 期間のstartDateとlabelから YYYYMM + first/latter を生成
+// 期間から /<shopIdx>/<月数字><first|latter> を生成
+// 例: /0/202506first  /1/202506latter
 function makePeriodSlug(period){
   if(!period||!period.startDate)return null;
   const d=pd(period.startDate);
-  const ym=`${d.getFullYear()}${String(d.getMonth()+1).padStart(2,"0")}`;
-  // 後半判定: 開始日が16日以降 or ラベルに「後半」を含む
-  const isLatter = d.getDate()>=16 || (period.label&&period.label.includes("後半"));
-  return ym+(isLatter?"latter":"first");
+  const mo=d.getMonth()+1; // 月は整数（ゼロ埋めなし）
+  const yr=d.getFullYear();
+  const isLatter=d.getDate()>=16||(period.label&&period.label.includes("後半"));
+  return `${yr}${mo}${isLatter?"latter":"first"}`;
 }
 
-// URL形式: #/<shopId>/<slug>  例: #/shop_123/202506first
+// URL形式: #/<shopIdx>/<slug>  例: #/0/202506first
+// shopIdx = shops配列内のインデックス（0始まり）
 function parseUrl(){
-  const h=window.location.hash; // "#/shop_xxx/202506first"
+  const h=window.location.hash;
   if(h.startsWith("#/")){
     const parts=h.slice(2).split("/");
-    if(parts.length>=2) return {shopId:parts[0],slug:parts[1]};
-    if(parts.length===1&&parts[0]) return {shopId:null,slug:parts[0]};
+    if(parts.length>=2){
+      const shopIdx=isNaN(Number(parts[0]))?null:Number(parts[0]);
+      return{shopIdx,slug:parts[1]};
+    }
+    if(parts.length===1&&parts[0])return{shopIdx:null,slug:parts[0]};
   }
-  // 旧形式互換
-  if(h.startsWith("#p=")) return {shopId:null,slug:null,legacyPid:h.slice(3)};
+  if(h.startsWith("#p="))return{shopIdx:null,slug:null,legacyPid:h.slice(3)};
   return null;
 }
 
-function buildUrl(shopId, period){
+function buildUrl(shops,shopId,period){
   const slug=makePeriodSlug(period);
-  if(!shopId||!slug)return "";
-  return `${window.location.origin}${window.location.pathname}#/${shopId}/${slug}`;
+  if(!slug)return "";
+  const idx=shops.findIndex(s=>s.id===shopId);
+  const shopIdx=idx>=0?idx:0;
+  return`${window.location.origin}${window.location.pathname}#/${shopIdx}/${slug}`;
 }
 
-function setUrl(shopId, period){
+function setUrl(shops,shopId,period){
   const slug=makePeriodSlug(period);
-  if(shopId&&slug) window.location.hash=`/${shopId}/${slug}`;
+  if(!slug)return;
+  const idx=shops.findIndex(s=>s.id===shopId);
+  const shopIdx=idx>=0?idx:0;
+  window.location.hash=`/${shopIdx}/${slug}`;
 }
 
-// URLからperiodIdを解決（shops/periodsリストが必要）
+// URLからshopId+periodIdを解決
 function resolvePeriodFromUrl(shops,allPeriods){
   const parsed=parseUrl();
   if(!parsed)return null;
-  // 旧形式
   if(parsed.legacyPid){
     const found=allPeriods.find(p=>p.id===parsed.legacyPid);
-    return found?{period:found,shopId:found.shopId||null}:null;
+    return found?{period:found,shopId:found.shopId||shops[0]?.id}:null;
   }
   if(!parsed.slug)return null;
-  // shopId指定あり
+  // shopIdxでshopを特定
   let targetShops=shops;
-  if(parsed.shopId) targetShops=shops.filter(s=>s.id===parsed.shopId);
-  // slugでperiodを検索
+  if(parsed.shopIdx!==null&&shops[parsed.shopIdx]){
+    targetShops=[shops[parsed.shopIdx]];
+  }
   for(const shop of targetShops){
     const found=allPeriods.find(p=>(p.shopId===shop.id||!p.shopId)&&makePeriodSlug(p)===parsed.slug);
-    if(found)return {period:found,shopId:shop.id};
+    if(found)return{period:found,shopId:shop.id};
   }
   return null;
 }
@@ -466,7 +475,7 @@ function StaffView({periods,ap,apid,setApid,shopId,settings,subs,staffList,onSub
 
   if(done)return(
     <div style={{background:"#F0F2F5",minHeight:"calc(100vh - 44px)"}}>
-      <StaffHdr ap={ap} p0={p0} pe={pe} nd={dates.length} subs={subs} apid={apid} onSm={()=>setSm(true)} shopName={shopName} periods={periods} onChangePeriod={id=>{setApid(id);const p=periods.find(pp=>pp.id===id);if(p){const i={};gd(p.startDate,p.endDate).forEach(d=>{i[d]={status:"holiday"};});setSd(i);setDone(false);setComment("");setUrl(shopId,p);}}}/>
+      <StaffHdr ap={ap} p0={p0} pe={pe} nd={dates.length} subs={subs} apid={apid} onSm={()=>setSm(true)} shopName={shopName} periods={periods} onChangePeriod={id=>{setApid(id);const p=periods.find(pp=>pp.id===id);if(p){const i={};gd(p.startDate,p.endDate).forEach(d=>{i[d]={status:"holiday"};});setSd(i);setDone(false);setComment("");setUrl(shops,shopId,p);}}}/>
       {sm&&<SmModal subs={subs} periods={periods} apid={apid} onClose={()=>setSm(false)} staffList={staffList} onEditSub={sub=>{onSub(sub);}} onEditByName={sub=>{setName(sub.staffName);const init={};const ds2=ap?gd(ap.startDate,ap.endDate):[];ds2.forEach(d=>{init[d]=(sub.shifts||{})[d]||{status:"holiday"};});setSd(init);setComment(sub.comment||"");setDone(false);}}/>}
       <div style={{maxWidth:560,margin:"0 auto",padding:"50px 20px",textAlign:"center"}}>
         <div style={{fontSize:68,animation:"bI .5s"}}>✅</div>
@@ -487,7 +496,7 @@ function StaffView({periods,ap,apid,setApid,shopId,settings,subs,staffList,onSub
 
   return(
     <div style={{background:"#F0F2F5",minHeight:"calc(100vh - 44px)"}}>
-      <StaffHdr ap={ap} p0={p0} pe={pe} nd={dates.length} subs={subs} apid={apid} onSm={()=>setSm(true)} shopName={shopName} periods={periods} onChangePeriod={id=>{setApid(id);const p=periods.find(pp=>pp.id===id);if(p){const i={};gd(p.startDate,p.endDate).forEach(d=>{i[d]={status:"holiday"};});setSd(i);setDone(false);setComment("");setUrl(shopId,p);}}}/>
+      <StaffHdr ap={ap} p0={p0} pe={pe} nd={dates.length} subs={subs} apid={apid} onSm={()=>setSm(true)} shopName={shopName} periods={periods} onChangePeriod={id=>{setApid(id);const p=periods.find(pp=>pp.id===id);if(p){const i={};gd(p.startDate,p.endDate).forEach(d=>{i[d]={status:"holiday"};});setSd(i);setDone(false);setComment("");setUrl(shops,shopId,p);}}}/>
       {sm&&<SmModal subs={subs} periods={periods} apid={apid} onClose={()=>setSm(false)} staffList={staffList} onEditSub={sub=>{onSub(sub);}} onEditByName={sub=>{setName(sub.staffName);const init={};const ds2=ap?gd(ap.startDate,ap.endDate):[];ds2.forEach(d=>{init[d]=(sub.shifts||{})[d]||{status:"holiday"};});setSd(init);setComment(sub.comment||"");setDone(false);}}/>}
       <div style={{maxWidth:560,margin:"0 auto",padding:"14px 12px 120px"}}>
         {ap?.deadlineDate&&<div style={{background:dl?"#FFF0F1":"#FFFBEB",border:`1px solid ${dl?"#FF4757":"#FCD34D"}`,borderRadius:10,padding:"10px 14px",marginBottom:12,fontSize:13,fontWeight:700,color:dl?"#FF4757":"#92400E"}}>{dl?`⚠️ 締切済み（${ap.deadlineDate.replace(/-/g,"/")}）`:`📅 締切日：${ap.deadlineDate.replace(/-/g,"/")}`}</div>}
@@ -689,6 +698,49 @@ function StaffHdr({ap,p0,pe,nd,subs,apid,onSm,shopName,periods,onChangePeriod,ur
 }
 
 // ============================================================
+// セル編集パネル（元の時間を正しく初期表示）
+// ============================================================
+function CellEditPanel({sub,s,d,onApply,onClose}){
+  const[status,setStatus]=useState(s.status||"holiday");
+  const[start,setStart]=useState(s.start||"18:00");
+  const[end,setEnd]=useState(s.end||"23:00");
+  // statusが変わったとき出勤→即時適用
+  const handleStatus=v=>{
+    setStatus(v);
+    if(v==="holiday")onApply(v,start,end);
+  };
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.4)",zIndex:400,display:"flex",alignItems:"center",justifyContent:"center",padding:20,animation:"fI .2s"}} onClick={onClose}>
+      <div style={{background:"white",borderRadius:16,width:"100%",maxWidth:320,padding:"20px",animation:"sI .2s"}} onClick={e=>e.stopPropagation()}>
+        <div style={{fontSize:15,fontWeight:700,color:"#1A1A2E",marginBottom:4}}>{sub?.staffName}</div>
+        <div style={{fontSize:13,color:"#6B7280",marginBottom:14}}>{d.getMonth()+1}/{d.getDate()}（{WD[d.getDay()]}）</div>
+        <div style={{display:"flex",gap:8,marginBottom:14}}>
+          {[["work","出勤"],["holiday","休み"]].map(([v,l])=>(
+            <button key={v} onClick={()=>handleStatus(v)}
+              style={{flex:1,padding:"10px 0",border:`2px solid ${status===v?(v==="work"?"#06C755":"#FF4757"):"#E5E7EB"}`,borderRadius:10,background:status===v?(v==="work"?"#E8F9EE":"#FFF0F1"):"#F0F2F5",color:status===v?(v==="work"?"#166634":"#FF4757"):"#6B7280",fontWeight:700,fontSize:14,cursor:"pointer"}}>{l}</button>
+          ))}
+        </div>
+        {status==="work"&&<>
+          <div style={{display:"flex",gap:8,marginBottom:14}}>
+            {[["start","出勤時間"],["end","退勤時間"]].map(([f,l])=>(
+              <div key={f} style={{flex:1}}>
+                <div style={{fontSize:11,fontWeight:700,color:"#6B7280",marginBottom:4}}>{l}</div>
+                <select value={f==="start"?start:end} onChange={e=>f==="start"?setStart(e.target.value):setEnd(e.target.value)}
+                  style={{width:"100%",padding:"9px 10px",fontSize:15,fontWeight:700,background:"#F0F2F5",border:"2px solid #E5E7EB",borderRadius:9,color:"#1A1A2E",outline:"none",cursor:"pointer"}}>
+                  {TO.map(t=><option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+            ))}
+          </div>
+          <button onClick={()=>onApply(status,start,end)} style={{width:"100%",padding:"12px",background:"linear-gradient(135deg,#06C755,#05A847)",border:"none",borderRadius:10,color:"white",fontSize:15,fontWeight:700,cursor:"pointer",marginBottom:8}}>✅ 確定</button>
+        </>}
+        <button onClick={onClose} style={{width:"100%",padding:"10px",background:"#F0F2F5",border:"none",borderRadius:10,color:"#6B7280",fontSize:14,fontWeight:600,cursor:"pointer"}}>キャンセル</button>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
 // 提出状況モーダル（全画面・名前固定・横スクロール）
 // ============================================================
 function SmModal({subs,periods,apid,onClose,staffList,onEditSub,onEditByName}){
@@ -711,6 +763,11 @@ function SmModal({subs,periods,apid,onClose,staffList,onEditSub,onEditByName}){
     if(onEditByName)onEditByName(sub);
     onClose();
   };
+  // 名前列と日付列の縦スクロール同期用ref
+  const nameColRef=useRef();
+  const dataColRef=useRef();
+  const syncScroll=(src,dst)=>()=>{if(dst.current)dst.current.scrollTop=src.current.scrollTop;};
+
   return(
     <div style={{position:"fixed",inset:0,background:"white",zIndex:300,display:"flex",flexDirection:"column",animation:"fI .2s"}}>
       <div style={{background:"#06C755",padding:"12px 16px",flexShrink:0,boxShadow:"0 2px 8px rgba(6,199,85,.3)"}}>
@@ -723,66 +780,71 @@ function SmModal({subs,periods,apid,onClose,staffList,onEditSub,onEditByName}){
         </div>
       </div>
       {submitted.length===0
-        ?<div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",color:"#6B7280",fontSize:15,flexDirection:"column",gap:12,background:"white"}}>
+        ?<div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",color:"#6B7280",fontSize:15,flexDirection:"column",gap:12}}>
             <div>まだ提出者がいません</div>
             {notSubmitted.length>0&&<div style={{fontSize:13,color:"#9CA3AF"}}>未提出：{notSubmitted.join("、")}</div>}
           </div>
-        :<div style={{flex:1,display:"flex",overflow:"hidden",background:"white"}}>
-          {/* 名前列（固定） */}
-          <div style={{width:NW,flexShrink:0,borderRight:"1px solid #E5E7EB",display:"flex",flexDirection:"column",background:"white"}}>
-            <div style={{height:52,borderBottom:"1px solid #E5E7EB",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,color:"#6B7280",flexShrink:0,background:"white"}}>名前</div>
-            <div style={{overflow:"hidden",flex:1,background:"white"}}>
-              {submitted.map((sub,ri)=>(
+        :<div style={{flex:1,display:"flex",overflow:"hidden"}}>
+          {/* 左固定：名前列（ヘッダー＋データ） */}
+          <div style={{width:NW,flexShrink:0,display:"flex",flexDirection:"column",borderRight:"2px solid #E5E7EB",zIndex:2}}>
+            {/* 名前ヘッダー */}
+            <div style={{height:52,flexShrink:0,borderBottom:"1px solid #E5E7EB",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,color:"#6B7280",background:"#F9FAFB"}}>名前</div>
+            {/* 名前データ（スクロール同期） */}
+            <div ref={nameColRef} onScroll={syncScroll(nameColRef,dataColRef)} style={{flex:1,overflowY:"scroll",overflowX:"hidden",scrollbarWidth:"none"}}>
+              {submitted.map(sub=>(
                 <div key={sub.id} onClick={()=>handleNameClick(sub)}
-                  style={{minHeight:72,borderBottom:"1px solid #E5E7EB",display:"flex",alignItems:"center",padding:"8px",background:"white",cursor:"pointer",transition:"background .15s"}}
+                  style={{height:72,borderBottom:"1px solid #E5E7EB",display:"flex",alignItems:"center",justifyContent:"center",padding:"6px",background:"white",cursor:"pointer",flexShrink:0}}
                   onMouseEnter={e=>e.currentTarget.style.background="#E8F9EE"}
                   onMouseLeave={e=>e.currentTarget.style.background="white"}>
-                  <div style={{textAlign:"center",width:"100%"}}>
-                    <span style={{fontSize:12,fontWeight:700,color:"#1A1A2E",wordBreak:"break-all",lineHeight:1.4,display:"block"}}>{sub.staffName}</span>
-                    <span style={{fontSize:10,color:"#06C755",marginTop:2,display:"block"}}>✎ 修正</span>
+                  <div style={{textAlign:"center"}}>
+                    <div style={{fontSize:12,fontWeight:700,color:"#1A1A2E",wordBreak:"break-all",lineHeight:1.3}}>{sub.staffName}</div>
+                    <div style={{fontSize:10,color:"#06C755",marginTop:2}}>✎ 修正</div>
                   </div>
                 </div>
               ))}
             </div>
           </div>
-          {/* 日付＋シフト横スクロール */}
-          <div style={{flex:1,overflow:"auto",display:"flex",flexDirection:"column",background:"white"}}>
-            <div style={{display:"flex",flexShrink:0,borderBottom:"1px solid #E5E7EB",background:"white",position:"sticky",top:0,zIndex:5}}>
+
+          {/* 右スクロール：日付列（ヘッダー＋データ） */}
+          <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+            {/* 日付ヘッダー（横スクロールは dataColRef に連動するためref設定） */}
+            <div id="sm-date-header" style={{height:52,flexShrink:0,overflowX:"hidden",borderBottom:"1px solid #E5E7EB",background:"#F9FAFB",display:"flex"}}>
               {dates.map(ds=>{const d=pd(ds),m=d.getMonth()+1,day=d.getDate(),dow=d.getDay(),wd=WD[dow],iS=dow===6,iSu=dow===0||isHoliday(ds);return(
-                <div key={ds} style={{width:CW,flexShrink:0,padding:"4px",textAlign:"center",height:52,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",borderRight:"1px solid #E5E7EB",background:"white"}}>
+                <div key={ds} style={{width:CW,flexShrink:0,textAlign:"center",height:52,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",borderRight:"1px solid #E5E7EB"}}>
                   <div style={{fontSize:13,fontWeight:700,color:"#1A1A2E"}}>{m}/{day}</div>
-                  <div style={{display:"inline-block",fontSize:11,fontWeight:700,padding:"1px 6px",borderRadius:4,background:iS?"#EFF6FF":iSu?"#FFF0F1":"#F0F2F5",color:iS?"#3B82F6":iSu?"#FF4757":"#6B7280",marginTop:2}}>{wd}{isHoliday(ds)?"祝":""}</div>
+                  <div style={{fontSize:11,fontWeight:700,padding:"1px 6px",borderRadius:4,background:iS?"#EFF6FF":iSu?"#FFF0F1":"#F0F2F5",color:iS?"#3B82F6":iSu?"#FF4757":"#6B7280",marginTop:2}}>{wd}{isHoliday(ds)?"祝":""}</div>
                 </div>
               );})}
-              <div style={{width:COMMENT_W,flexShrink:0,height:52,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,color:"#6B7280",borderRight:"1px solid #E5E7EB",background:"white"}}>コメント</div>
+              <div style={{width:COMMENT_W,flexShrink:0,height:52,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,color:"#6B7280",borderRight:"1px solid #E5E7EB"}}>コメント</div>
             </div>
-            {submitted.map((sub,ri)=>(
-              <div key={sub.id} style={{display:"flex",background:"white",flexShrink:0,borderBottom:"1px solid #E5E7EB"}}>
-                {dates.map(ds=>{
-                  // shiftsのデータ取得（Firebase経由でも確実に取得）
-                  const rawShifts=sub.shifts||{};
-                  const s=rawShifts[ds]||null;
-                  const iw=s&&s.status==="work";
-                  const isEditing=editTarget&&editTarget.subId===sub.id&&editTarget.ds===ds;
-                  return(
-                    <div key={ds} onClick={()=>handleCellClick(sub,ds)}
-                      style={{width:CW,flexShrink:0,minHeight:72,padding:"6px 4px",borderRight:"1px solid #E5E7EB",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:3,cursor:"pointer",background:isEditing?"#E8F9EE":"white",transition:"background .15s"}}
-                      onMouseEnter={e=>{if(!isEditing)e.currentTarget.style.background="#F9FAFB";}}
-                      onMouseLeave={e=>{if(!isEditing)e.currentTarget.style.background="white";}}>
-                      {iw?(<>
-                        <div style={{fontSize:11,fontWeight:700,background:"#E8F9EE",color:"#15803D",padding:"2px 6px",borderRadius:4,border:"1px solid #C2F0D2",whiteSpace:"nowrap"}}>出勤</div>
-                        <div style={{fontSize:12,fontWeight:700,color:"#1A1A2E",whiteSpace:"nowrap"}}>{s.start||"--:--"}</div>
-                        <div style={{fontSize:10,color:"#9CA3AF"}}>〜</div>
-                        <div style={{fontSize:12,fontWeight:700,color:"#1A1A2E",whiteSpace:"nowrap"}}>{s.end||"--:--"}</div>
-                      </>):(<div style={{fontSize:14,color:"#C4C4C4"}}>🌙</div>)}
-                    </div>
-                  );
-                })}
-                <div style={{width:COMMENT_W,flexShrink:0,minHeight:72,padding:"8px",borderRight:"1px solid #E5E7EB",display:"flex",alignItems:"center",background:"white"}}>
-                  <span style={{fontSize:11,color:"#6B7280",lineHeight:1.5,wordBreak:"break-all"}}>{sub.comment||""}</span>
+            {/* データ本体（縦横スクロール・名前列と縦同期） */}
+            <div ref={dataColRef} onScroll={syncScroll(dataColRef,nameColRef)} style={{flex:1,overflow:"auto"}}>
+              {submitted.map(sub=>(
+                <div key={sub.id} style={{display:"flex",height:72,borderBottom:"1px solid #E5E7EB",flexShrink:0}}>
+                  {dates.map(ds=>{
+                    const s=(sub.shifts||{})[ds]||null;
+                    const iw=s&&s.status==="work";
+                    const isEditing=editTarget&&editTarget.subId===sub.id&&editTarget.ds===ds;
+                    return(
+                      <div key={ds} onClick={()=>handleCellClick(sub,ds)}
+                        style={{width:CW,flexShrink:0,height:72,padding:"4px",borderRight:"1px solid #E5E7EB",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,cursor:"pointer",background:isEditing?"#E8F9EE":"white"}}
+                        onMouseEnter={e=>{if(!isEditing)e.currentTarget.style.background="#F9FAFB";}}
+                        onMouseLeave={e=>{if(!isEditing)e.currentTarget.style.background=isEditing?"#E8F9EE":"white";}}>
+                        {iw?(<>
+                          <div style={{fontSize:10,fontWeight:700,background:"#E8F9EE",color:"#15803D",padding:"1px 5px",borderRadius:3,border:"1px solid #C2F0D2"}}>出勤</div>
+                          <div style={{fontSize:11,fontWeight:700,color:"#1A1A2E",whiteSpace:"nowrap"}}>{s.start||"--:--"}</div>
+                          <div style={{fontSize:9,color:"#9CA3AF"}}>〜</div>
+                          <div style={{fontSize:11,fontWeight:700,color:"#1A1A2E",whiteSpace:"nowrap"}}>{s.end||"--:--"}</div>
+                        </>):(<div style={{fontSize:13,color:"#D1D5DB"}}>🌙</div>)}
+                      </div>
+                    );
+                  })}
+                  <div style={{width:COMMENT_W,flexShrink:0,height:72,padding:"6px 8px",borderRight:"1px solid #E5E7EB",display:"flex",alignItems:"center"}}>
+                    <span style={{fontSize:11,color:"#6B7280",lineHeight:1.4,wordBreak:"break-all",display:"-webkit-box",WebkitLineClamp:3,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{sub.comment||""}</span>
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
         </div>
       }
@@ -790,31 +852,13 @@ function SmModal({subs,periods,apid,onClose,staffList,onEditSub,onEditByName}){
         const sub=submitted.find(s=>s.id===editTarget.subId);
         const s=(sub?.shifts||{})[editTarget.ds]||{status:"holiday"};
         const d=pd(editTarget.ds);
-        return(
-          <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.4)",zIndex:400,display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={()=>setEditTarget(null)}>
-            <div style={{background:"white",borderRadius:16,width:"100%",maxWidth:320,padding:"20px",animation:"sI .2s"}} onClick={e=>e.stopPropagation()}>
-              <div style={{fontSize:15,fontWeight:700,color:"#1A1A2E",marginBottom:12}}>{sub?.staffName} — {d.getMonth()+1}/{d.getDate()}（{WD[d.getDay()]}）</div>
-              <div style={{display:"flex",gap:8,marginBottom:14}}>
-                {[["work","出勤"],["holiday","休み"]].map(([v,l])=>(
-                  <button key={v} onClick={()=>{applyCellEdit(editTarget.subId,editTarget.ds,v,s.start||"18:00",s.end||"23:00");}}
-                    style={{flex:1,padding:"10px 0",border:`2px solid ${s.status===v?(v==="work"?"#06C755":"#FF4757"):"#E5E7EB"}`,borderRadius:10,background:s.status===v?(v==="work"?"#E8F9EE":"#FFF0F1"):"#F0F2F5",color:s.status===v?(v==="work"?"#166634":"#FF4757"):"#6B7280",fontWeight:700,fontSize:14,cursor:"pointer"}}>{l}</button>
-                ))}
-              </div>
-              {s.status==="work"&&<div style={{display:"flex",gap:8}}>
-                {[["start","出勤"],["end","退勤"]].map(([f,l])=>(
-                  <div key={f} style={{flex:1}}>
-                    <div style={{fontSize:11,fontWeight:700,color:"#6B7280",marginBottom:4}}>{l}</div>
-                    <select defaultValue={s[f]||"18:00"} onChange={e=>{applyCellEdit(editTarget.subId,editTarget.ds,s.status,f==="start"?e.target.value:(s.start||"18:00"),f==="end"?e.target.value:(s.end||"23:00"));}}
-                      style={{width:"100%",padding:"9px 10px",fontSize:14,fontWeight:600,background:"#F0F2F5",border:"2px solid #E5E7EB",borderRadius:9,color:"#1A1A2E",outline:"none",cursor:"pointer"}}>
-                      {TO.map(t=><option key={t} value={t}>{t}</option>)}
-                    </select>
-                  </div>
-                ))}
-              </div>}
-              <button onClick={()=>setEditTarget(null)} style={{width:"100%",marginTop:14,padding:"10px",background:"#F0F2F5",border:"none",borderRadius:10,color:"#6B7280",fontSize:14,fontWeight:600,cursor:"pointer"}}>閉じる</button>
-            </div>
-          </div>
-        );
+        // 編集用state（元の時間を初期値として保持）
+        return <CellEditPanel
+          key={editTarget.subId+editTarget.ds}
+          sub={sub} s={s} d={d}
+          onApply={(status,start,end)=>applyCellEdit(editTarget.subId,editTarget.ds,status,start,end)}
+          onClose={()=>setEditTarget(null)}
+        />;
       })()}
       {notSubmitted.length>0&&<div style={{background:"white",borderTop:"1px solid #E5E7EB",padding:"10px 16px",flexShrink:0}}>
         <div style={{fontSize:12,fontWeight:700,color:"#9CA3AF",marginBottom:6}}>📋 未提出（{notSubmitted.length}名）</div>
@@ -910,7 +954,7 @@ function AdminView({settings,periods,subs,staffList,shops,currentShopId,saveSett
         </div>
       </div>
       <div style={{maxWidth:900,margin:"0 auto",padding:"20px 14px 60px"}}>
-        {tab==="periods"&&<PeriodsTab periods={periods} subs={subs} staffList={staffList} onSave={savePeriods} tt={tt} shopId={currentShopId}/>}
+        {tab==="periods"&&<PeriodsTab periods={periods} subs={subs} staffList={staffList} shops={shops} onSave={savePeriods} tt={tt} shopId={currentShopId}/>}
         {tab==="staff"&&<StaffTab staffList={staffList} onSave={saveStaff} tt={tt}/>}
         {tab==="candidates"&&<CandTab settings={settings} onSave={saveSettings} tt={tt}/>}
         {tab==="submissions"&&<SubsTab subs={subs} periods={periods} staffList={staffList} onSave={saveSubs} tt={tt}/>}
@@ -922,7 +966,7 @@ function AdminView({settings,periods,subs,staffList,shops,currentShopId,saveSett
 }
 
 // ===== 期間管理タブ =====
-function PeriodsTab({periods,subs,staffList,onSave,tt,shopId}){
+function PeriodsTab({periods,subs,staffList,shops,onSave,tt,shopId}){
   const[eid,setEid]=useState(null);
   const[form,setForm]=useState({label:"",startDate:"",endDate:"",deadlineDate:""});
   const[show,setShow]=useState(false);
@@ -980,7 +1024,7 @@ function PeriodsTab({periods,subs,staffList,onSave,tt,shopId}){
 
       {[...periods].reverse().map(p=>{
         const dates=gd(p.startDate,p.endDate),ip=idp(p.deadlineDate);
-        const pUrl=buildUrl(shopId,p);
+        const pUrl=buildUrl(shops,shopId,p);
         return(
           <div key={p.id} style={{background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.08)",borderRadius:14,padding:18,marginBottom:12,cursor:"pointer"}} onClick={e=>{if(e.target.tagName==="BUTTON"||e.target.closest("button"))return;setViewPeriodId(p.id);}}>
             {eid===p.id
