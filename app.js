@@ -357,7 +357,7 @@ function App(){
 
     // URLなし → 通常モード（管理者画面も使える）
     if(!parsed){
-      if(periods.length>0){ if(!apid)setApid(periods[0].id); }
+      if(periods.length>0) setApid(periods[0].id);
       setUrlResolved(true);
       return;
     }
@@ -376,18 +376,20 @@ function App(){
         return;
       }
       console.warn("token一致なし:", parsed.token);
-      if(!apid&&periods.length>0) setApid(periods[0].id);
+      if(periods.length>0) setApid(periods[0].id);
       setView("staff");
       setUrlResolved(true);
       return;
     }
 
-    if(!apid&&periods.length>0) setApid(periods[0].id);
+    if(periods.length>0) setApid(periods[0].id);
     setUrlResolved(true);
-  },[ready,shops,periods,urlResolved,sid,apid]);
+  },[ready,shops,periods,urlResolved,sid]); // apidを依存から外す（変化で再実行しない）
 
-  // periodsが来たらapidを設定
-  useEffect(()=>{ if(!apid&&periods.length>0)setApid(periods[0].id); },[periods]);
+  // periodsが来たらapidを設定（URLで指定済みの場合は上書きしない）
+  useEffect(()=>{
+    if(!apid&&periods.length>0&&urlResolved)setApid(periods[0].id);
+  },[periods,urlResolved]);
 
   // ===================================================================
   // 保存関数（Firebase + localStorage 二重書き）
@@ -424,7 +426,9 @@ function App(){
     }
   },[]);
 
-  const ap=periods.find(p=>p.id===apid)||periods[0];
+  // ap: apidに対応するperiodを取得
+  // urlLocked時はapidが確定するまでperiods[0]を使わない
+  const ap=periods.find(p=>p.id===apid)||(urlLocked?null:periods[0]);
   const effectiveSettings=settings||makeSettings(sid);
 
   // ローディング画面（Phase1完了まで、またはURLモードでperiodsが届くまで）
