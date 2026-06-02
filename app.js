@@ -346,8 +346,16 @@ function App(){
 
   return(
     <div style={{fontFamily:"'Hiragino Sans','Yu Gothic',sans-serif",minHeight:"100vh",background:view==="admin"?"#1A1A2E":"#F0F2F5"}}>
-      {/* 同期ステータスバー */}
-      {/* Firebase同期バッジ非表示 */}
+      {/* デバッグ・同期ステータスバー */}
+      <div style={{background:syncStatus==="online"?"#06C755":syncStatus==="offline"?"#F59E0B":"#6B7280",color:"white",fontSize:11,fontWeight:700,textAlign:"center",padding:"4px 8px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <span>{syncStatus==="online"?"🟢 Firebase接続中":syncStatus==="offline"?"🟡 オフライン":syncStatus==="no_config"?"⚙️ 未設定":"⏳ 接続中..."}</span>
+        <button onClick={()=>{
+          if(!firebaseDB){alert("firebaseDB=null\nFirebase SDKが読み込まれていません");return;}
+          firebaseDB.ref("debug_test").set({t:Date.now(),msg:"接続テスト"})
+            .then(()=>alert("✅ Firebase書き込み成功！\n同期は正常です"))
+            .catch(e=>alert("❌ Firebase書き込み失敗:\n"+e.message+"\n\nFirebaseのセキュリティルールを確認してください"));
+        }} style={{background:"rgba(255,255,255,.25)",border:"none",borderRadius:6,padding:"2px 8px",color:"white",fontSize:11,fontWeight:700,cursor:"pointer"}}>🔍 接続テスト</button>
+      </div>
       {/* タブ */}
       <div style={{display:"flex",position:"sticky",top:0,zIndex:100,boxShadow:"0 2px 8px rgba(0,0,0,.15)"}}>
         <button onClick={()=>setView("staff")} style={{flex:1,padding:"13px 0",border:"none",cursor:"pointer",fontSize:14,fontWeight:700,background:view==="staff"?"#06C755":"#1A1A2E",color:"white"}}>📅 スタッフ画面</button>
