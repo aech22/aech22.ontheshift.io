@@ -131,75 +131,45 @@ function makeSettings(shopId){
   return{shopId,password:DEFAULT_PW,candidates:CAND_WEEKDAY,weekdayCandidates:{0:CAND_WEEKEND,6:CAND_WEEKEND},dateCandidates:{},templates:[]};
 }
 
-// ===== URL スラッグ生成 =====
-// 期間から /<shopIdx>/<月数字><first|latter> を生成
-// 例: /0/202506first  /1/202506latter
-function makePeriodSlug(period){
-  if(!period||!period.startDate)return null;
-  const d=pd(period.startDate);
-  const mo=d.getMonth()+1; // 月は整数（ゼロ埋めなし）
-  const yr=d.getFullYear();
-  const isLatter=d.getDate()>=16||(period.label&&period.label.includes("後半"));
-  return `${yr}${mo}${isLatter?"latter":"first"}`;
+// ===== URL生成・解析 =====
+// 形式: #/<shopIdx>/<periodId>
+// 例:   #/0/p_1749123456789
+// periodIdを直接URLに埋め込むことで1対1対応を保証
+
+function buildUrl(shops,shopId,period){
+  if(!period||!period.id)return "";
+  const idx=shops.findIndex(s=>s.id===shopId);
+  const shopIdx=idx>=0?idx:0;
+  return`${window.location.origin}${window.location.pathname}#/${shopIdx}/${period.id}`;
 }
 
-// URL形式: #/<shopIdx>/<slug>  例: #/0/202506first
-// shopIdx = shops配列内のインデックス（0始まり）
 function parseUrl(){
   const h=window.location.hash;
   if(h.startsWith("#/")){
     const parts=h.slice(2).split("/");
     if(parts.length>=2){
       const shopIdx=isNaN(Number(parts[0]))?null:Number(parts[0]);
-      return{shopIdx,slug:parts[1]};
+      return{shopIdx,periodId:parts[1]};
     }
-    if(parts.length===1&&parts[0])return{shopIdx:null,slug:parts[0]};
+    if(parts.length===1&&parts[0])return{shopIdx:null,periodId:parts[0]};
   }
-  if(h.startsWith("#p="))return{shopIdx:null,slug:null,legacyPid:h.slice(3)};
+  // 旧形式互換
+  if(h.startsWith("#p="))return{shopIdx:null,periodId:h.slice(3)};
   return null;
 }
 
-function buildUrl(shops,shopId,period){
-  const slug=makePeriodSlug(period);
-  if(!slug)return "";
-  const idx=shops.findIndex(s=>s.id===shopId);
-  const shopIdx=idx>=0?idx:0;
-  return`${window.location.origin}${window.location.pathname}#/${shopIdx}/${slug}`;
-}
-
-function setUrl(shops,shopId,period){
-  const slug=makePeriodSlug(period);
-  if(!slug)return;
-  const idx=shops.findIndex(s=>s.id===shopId);
-  const shopIdx=idx>=0?idx:0;
-  window.location.hash=`/${shopIdx}/${slug}`;
-}
-
-// URLからshopId+periodIdを解決
+// URLからshopId+periodを解決
 function resolvePeriodFromUrl(shops,allPeriods){
   const parsed=parseUrl();
-  if(!parsed)return null;
-  // 旧形式 (#p=xxx)
-  if(parsed.legacyPid){
-    const found=allPeriods.find(p=>p.id===parsed.legacyPid);
-    return found?{period:found,shopId:found.shopId||shops[0]?.id}:null;
-  }
-  if(!parsed.slug)return null;
+  if(!parsed||!parsed.periodId)return null;
+  const pid=parsed.periodId;
 
-  // slugで全periodsを検索（shopId条件は緩めに）
-  const slug=parsed.slug;
-
-  // まずshopIdxで絞り込んで検索
-  if(parsed.shopIdx!=null&&shops[parsed.shopIdx]){
-    const targetShopId=shops[parsed.shopIdx].id;
-    const found=allPeriods.find(p=>makePeriodSlug(p)===slug&&(p.shopId===targetShopId||!p.shopId));
-    if(found)return{period:found,shopId:targetShopId};
-  }
-
-  // shopIdx指定なし or 見つからない → 全periodsからslugで検索
-  const found=allPeriods.find(p=>makePeriodSlug(p)===slug);
+  // periodIdで直接検索（確実・高速）
+  const found=allPeriods.find(p=>p.id===pid);
   if(found){
-    const shopId=found.shopId||shops[0]?.id;
+    // shopIdxでshopを特定、なければfound.shopIdを使用
+    let shopId=found.shopId||shops[0]?.id;
+    if(parsed.shopIdx!=null&&shops[parsed.shopIdx]) shopId=shops[parsed.shopIdx].id;
     return{period:found,shopId};
   }
   return null;
@@ -376,9 +346,8 @@ function App(){
     return()=>{ console.log("Phase2: 購読解除 sid=",sid); refs.forEach(r=>r.off()); };
   },[ready,sid]);
 
-  // URLにslugが含まれるか（スタッフ専用モード判定）
-  // readyになる前でも計算可能（window.location.hashは常に存在）
-  const [urlLocked]=useState(()=>{ const p=parseUrl(); return !!(p&&p.slug); });
+  // URLにperiodIdが含まれるか（スタッフ専用モード判定）
+  const [urlLocked]=useState(()=>{ const p=parseUrl(); return !!(p&&p.periodId); });
 
   // ===================================================================
   // Phase3: periods確定後にURL解決・apid初期化
@@ -400,8 +369,8 @@ function App(){
       if(ts&&ts.id!==sid){ setCurrentShopId(ts.id); return; }
     }
 
-    // slugでperiod解決（periodsが届くまで待機）
-    if(parsed.slug){
+    // periodIdでperiod解決（periodsが届くまで待機）
+    if(parsed.periodId){
       if(periods.length===0)return; // まだperiods未着 → 待機
       const r=resolvePeriodFromUrl(shops,periods);
       if(r){
@@ -412,9 +381,8 @@ function App(){
         setUrlResolved(true);
         return;
       }
-      // slug一致なし → slugを直接比較してデバッグ情報をログ出力
-      console.warn("slug一致なし:", parsed.slug, "利用可能なslug:", periods.map(p=>makePeriodSlug(p)));
-      // 最初のperiodを使用してスタッフ画面を表示
+      // periodId一致なし → デバッグログ出力
+      console.warn("periodId一致なし:", parsed.periodId, "利用可能なperiodId:", periods.map(p=>p.id));
       if(!apid&&periods.length>0) setApid(periods[0].id);
       setView("staff");
       setUrlResolved(true);
@@ -467,7 +435,7 @@ function App(){
   const effectiveSettings=settings||makeSettings(sid);
 
   // ローディング画面（Phase1完了まで、またはURLモードでperiodsが届くまで）
-  if(!ready||(urlLocked&&periods.length===0)) return(
+  if(!ready||(urlLocked&&!apid)) return(
     <div style={{display:"flex",alignItems:"center",justifyContent:"center",minHeight:"100vh",background:"#1A1A2E",flexDirection:"column",gap:16}}>
       <div style={{fontSize:40}}>📅</div>
       <div style={{color:"white",fontSize:16,fontWeight:700}}>シフト管理システム</div>
@@ -1024,7 +992,7 @@ function AdminView({settings,periods,subs,staffList,shops,currentShopId,saveSett
         </div>
       </div>
       <div style={{maxWidth:900,margin:"0 auto",padding:"20px 14px 60px"}}>
-        {tab==="periods"&&<PeriodsTab periods={periods} subs={subs} staffList={staffList} shops={shops} onSave={savePeriods} tt={tt} shopId={currentShopId}/>}
+        {tab==="periods"&&<PeriodsTab periods={periods} subs={subs} staffList={staffList} shops={shops} onSave={savePeriods} tt={tt} shopId={currentShopId} shopName={(shops.find(s=>s.id===currentShopId)||shops[0])?.name}/>}
         {tab==="staff"&&<StaffTab staffList={staffList} onSave={saveStaff} tt={tt}/>}
         {tab==="candidates"&&<CandTab settings={settings} onSave={saveSettings} tt={tt}/>}
         {tab==="submissions"&&<SubsTab subs={subs} periods={periods} staffList={staffList} onSave={saveSubs} tt={tt}/>}
@@ -1036,7 +1004,7 @@ function AdminView({settings,periods,subs,staffList,shops,currentShopId,saveSett
 }
 
 // ===== 期間管理タブ =====
-function PeriodsTab({periods,subs,staffList,shops,onSave,tt,shopId}){
+function PeriodsTab({periods,subs,staffList,shops,onSave,tt,shopId,shopName}){
   const[eid,setEid]=useState(null);
   const[form,setForm]=useState({label:"",startDate:"",endDate:"",deadlineDate:""});
   const[show,setShow]=useState(false);
@@ -1109,7 +1077,7 @@ function PeriodsTab({periods,subs,staffList,shops,onSave,tt,shopId}){
                   </div>
                   <div style={{display:"flex",gap:5,flexShrink:0,flexWrap:"wrap",justifyContent:"flex-end"}}>
                     <button onClick={e=>{e.stopPropagation();setEid(p.id);}} style={{padding:"5px 9px",background:"rgba(255,255,255,.08)",border:"1px solid rgba(255,255,255,.15)",borderRadius:6,color:"rgba(255,255,255,.8)",fontSize:11,cursor:"pointer"}}>✏️ 編集</button>
-                    <button onClick={e=>{e.stopPropagation();expXl(p,subs,staffList,tt);}} style={{padding:"5px 9px",background:"linear-gradient(135deg,#217346,#1A5C38)",border:"none",borderRadius:6,color:"white",fontSize:11,fontWeight:700,cursor:"pointer"}}>📊 Excel</button>
+                    <button onClick={e=>{e.stopPropagation();expXl(p,subs,staffList,tt,shopName);}} style={{padding:"5px 9px",background:"linear-gradient(135deg,#217346,#1A5C38)",border:"none",borderRadius:6,color:"white",fontSize:11,fontWeight:700,cursor:"pointer"}}>📊 Excel</button>
                     <button onClick={e=>{e.stopPropagation();if(!confirm("削除しますか？"))return;onSave(periods.filter(pp=>pp.id!==p.id));tt("🗑️ 削除しました");}} style={AD}>削除</button>
                   </div>
                 </div>
@@ -1142,7 +1110,7 @@ function PEF({period,onSave,onCancel}){
 }
 
 // ===== Excel出力 =====
-function expXl(p,subs,staffList,tt){
+function expXl(p,subs,staffList,tt,shopName){
   const ss=subs.filter(s=>s.periodId===p.id);
   if(typeof XLSX==="undefined"){tt("⚠️ SheetJS未読込み");return;}
   const dates=gd(p.startDate,p.endDate);
@@ -1153,69 +1121,178 @@ function expXl(p,subs,staffList,tt){
   if(sl.length===0){tt("⚠️ 提出データがありません");return;}
 
   // ============================================================
-  // フォーマット：
-  //   行1(ヘッダー上)： 空|空|名前1|名前1|名前2|名前2|...
-  //   行2(ヘッダー下)： 日付|曜日|出勤|退勤|出勤|退勤|...
-  //   行3以降(データ)： 各スタッフ1行、日付ごとに出勤・退勤を2列
+  // レイアウト：
+  //   A1  : 店舗名（縦書き）
+  //   B1  : ◯月前半 or ◯月後半
+  //   A列(行2〜): 日付数字（上下2行を結合・中央）
+  //   B列(行2〜): 曜日（上下2行を結合・中央）
+  //   C列以降   : スタッフ名（行1）、出勤/退勤時間（行2〜）
+  //   1日 = 2行（上=出勤、下=退勤）
   // ============================================================
-  const headerRow1=["",""];
-  const headerRow2=["日付","曜日"];
-  sl.forEach(n=>{headerRow1.push(n,n);headerRow2.push("出勤","退勤");});
 
-  const dataRows=[headerRow1,headerRow2];
+  // 期間ラベル（◯月前半/後半）
+  const firstDate=pd(dates[0]);
+  const mo=firstDate.getMonth()+1;
+  const isLatter=firstDate.getDate()>=16||(p.label&&p.label.includes("後半"));
+  const periodLabel=`${mo}月${isLatter?"後半":"前半"}`;
 
-  dates.forEach(ds=>{
-    const d=pd(ds),disp=`${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,"0")}/${String(d.getDate()).padStart(2,"0")}`,wd=WD[d.getDay()];
-    const row=[disp,wd];
-    sl.forEach(nm=>{
-      const sub=ss.find(s=>s.staffName===nm),sh=sub?.shifts?.[ds];
-      if(!sh||sh.status==="holiday"){row.push("","");}
-      else{row.push(timeToNum(sh.start),timeToNum(sh.end));}
-    });
-    dataRows.push(row);
+  // 枠線スタイル定義
+  const thinLine={style:"thin",color:{rgb:"AAAAAA"}};
+  const dotLine={style:"hair",color:{rgb:"AAAAAA"}}; // 一番細かい点線
+  const border=(top,bottom,left,right)=>({
+    top:top?thinLine:undefined,
+    bottom:bottom?thinLine:undefined,
+    left:left?thinLine:undefined,
+    right:right?thinLine:undefined
+  });
+  const borderDotBottom=(left,right)=>({
+    top:thinLine,
+    bottom:dotLine,
+    left:left?thinLine:undefined,
+    right:right?thinLine:undefined
+  });
+  const borderDotTop=(left,right)=>({
+    top:dotLine,
+    bottom:thinLine,
+    left:left?thinLine:undefined,
+    right:right?thinLine:undefined
   });
 
-  const ws=XLSX.utils.aoa_to_sheet(dataRows);
-  const nc=2+sl.length*2;
+  // セルへの書き込みヘルパー
+  const setCell=(ws,r,c,v,s)=>{
+    const ref=XLSX.utils.encode_cell({r,c});
+    const t=(typeof v==="number")?"n":"s";
+    ws[ref]={v:v===""||v===undefined||v===null?"":v,t,s:s||{}};
+  };
 
-  // 列幅
-  ws["!cols"]=[{wch:12},{wch:4},...sl.flatMap(()=>[{wch:7},{wch:7}])];
+  // シート範囲計算
+  const totalRows=1+dates.length*2; // 1(ヘッダー) + dates*2
+  const totalCols=2+sl.length;      // A(日付)+B(曜日)+スタッフ列
 
-  // スタイル：土=薄青、日祝=薄赤、休み=グレー斜線
-  // ヘッダー行（row 0,1）
-  for(let ri=0;ri<=1;ri++){
-    for(let ci=0;ci<nc;ci++){
-      const ref=XLSX.utils.encode_cell({r:ri,c:ci});
-      if(!ws[ref])ws[ref]={v:"",t:"s"};
-      ws[ref].s={fill:{patternType:"solid",fgColor:{rgb:"F0F0F0"}},font:{bold:true}};
-    }
-  }
-  // データ行（row 2以降）
-  dates.forEach((ds,ri)=>{
-    const d=pd(ds),dow=d.getDay(),isSat=dow===6,isSunHol=dow===0||isHoliday(ds);
-    const rowIdx=ri+2;
-    const bgColor=isSat?"DDEEFF":isSunHol?"FFEEEE":null;
-    for(let ci=0;ci<nc;ci++){
-      const ref=XLSX.utils.encode_cell({r:rowIdx,c:ci});
-      if(!ws[ref])ws[ref]={v:"",t:"s"};
-      if(!ws[ref].s)ws[ref].s={};
-      if(bgColor)ws[ref].s.fill={patternType:"solid",fgColor:{rgb:bgColor}};
-    }
+  // 空シート作成
+  const ws={"!ref":XLSX.utils.encode_range({s:{r:0,c:0},e:{r:totalRows-1,c:totalCols-1}})};
+
+  // ===== 行1: ヘッダー行 =====
+  // A1: 店舗名（縦書き）
+  setCell(ws,0,0,shopName||"",{
+    font:{bold:true,sz:11},
+    alignment:{textRotation:255,horizontal:"center",vertical:"center"}, // 255=縦書き
+    fill:{patternType:"solid",fgColor:{rgb:"F5F5F5"}},
+    border:border(true,true,true,true)
+  });
+  // B1: 期間ラベル
+  setCell(ws,0,1,periodLabel,{
+    font:{bold:true,sz:11},
+    alignment:{horizontal:"center",vertical:"center"},
+    fill:{patternType:"solid",fgColor:{rgb:"F5F5F5"}},
+    border:border(true,true,true,true)
+  });
+  // C1〜: スタッフ名
+  sl.forEach((nm,si)=>{
+    setCell(ws,0,2+si,nm,{
+      font:{bold:true,sz:10},
+      alignment:{horizontal:"center",vertical:"center"},
+      fill:{patternType:"solid",fgColor:{rgb:"F5F5F5"}},
+      border:border(true,true,true,true)
+    });
+  });
+
+  // ===== 行2〜: データ行（1日=2行）=====
+  const merges=[]; // セル結合リスト
+
+  dates.forEach((ds,di)=>{
+    const d=pd(ds),dow=d.getDay(),day=d.getDate(),wd=WD[dow];
+    const isSat=dow===6,isSunHol=dow===0||isHoliday(ds);
+    const bg=isSat?"DDEEFF":isSunHol?"FFEEEE":"FFFFFF";
+    const rT=1+di*2;  // 上行（出勤）
+    const rB=1+di*2+1;// 下行（退勤）
+
+    // A列: 日付数字（上下結合・中央）
+    setCell(ws,rT,0,day,{
+      font:{sz:10},
+      alignment:{horizontal:"center",vertical:"center"},
+      fill:{patternType:"solid",fgColor:{rgb:bg}},
+      border:border(true,true,true,true)
+    });
+    setCell(ws,rB,0,"",{
+      font:{sz:10},
+      fill:{patternType:"solid",fgColor:{rgb:bg}},
+      border:border(true,true,true,true)
+    });
+    merges.push({s:{r:rT,c:0},e:{r:rB,c:0}}); // A列結合
+
+    // B列: 曜日（上下結合・中央）
+    setCell(ws,rT,1,wd,{
+      font:{sz:10,color:{rgb:isSat?"3B82F6":isSunHol?"FF4757":"000000"}},
+      alignment:{horizontal:"center",vertical:"center"},
+      fill:{patternType:"solid",fgColor:{rgb:bg}},
+      border:border(true,true,true,true)
+    });
+    setCell(ws,rB,1,"",{
+      fill:{patternType:"solid",fgColor:{rgb:bg}},
+      border:border(true,true,true,true)
+    });
+    merges.push({s:{r:rT,c:1},e:{r:rB,c:1}}); // B列結合
+
+    // C列以降: スタッフデータ
     sl.forEach((nm,si)=>{
       const sub=ss.find(s=>s.staffName===nm),sh=sub?.shifts?.[ds];
-      if(!sh||sh.status==="holiday"){
-        [2+si*2,2+si*2+1].forEach(ci=>{
-          const ref=XLSX.utils.encode_cell({r:rowIdx,c:ci});
-          if(!ws[ref])ws[ref]={v:"",t:"s"};
-          if(!ws[ref].s)ws[ref].s={};
-          ws[ref].s.fill={patternType:"solid",fgColor:{rgb:bgColor||"E8E8E8"}};
-          ws[ref].s.border={diagonal:{style:"thin",color:{rgb:"999999"}},diagonalUp:true,diagonalDown:true};
+      const isWork=sh&&sh.status==="work";
+      const ci=2+si;
+      const isLast=si===sl.length-1;
+
+      if(isWork){
+        // 上行: 出勤時間（下に点線）
+        setCell(ws,rT,ci,timeToNum(sh.start),{
+          font:{sz:10},
+          alignment:{horizontal:"center",vertical:"center"},
+          fill:{patternType:"solid",fgColor:{rgb:bg}},
+          border:{
+            top:thinLine,
+            bottom:dotLine,
+            left:thinLine,
+            right:isLast?thinLine:thinLine
+          }
+        });
+        // 下行: 退勤時間（上に点線）
+        setCell(ws,rB,ci,timeToNum(sh.end),{
+          font:{sz:10},
+          alignment:{horizontal:"center",vertical:"center"},
+          fill:{patternType:"solid",fgColor:{rgb:bg}},
+          border:{
+            top:dotLine,
+            bottom:thinLine,
+            left:thinLine,
+            right:thinLine
+          }
+        });
+      } else {
+        // 休み: 斜線
+        const diagFill={patternType:"solid",fgColor:{rgb:isSat?"DDEEFF":isSunHol?"FFEEEE":"EEEEEE"}};
+        const diagBorder={diagonal:{style:"thin",color:{rgb:"BBBBBB"}},diagonalUp:true,diagonalDown:true};
+        setCell(ws,rT,ci,"",{
+          fill:diagFill,
+          border:{...border(true,false,true,true),...diagBorder}
+        });
+        setCell(ws,rB,ci,"",{
+          fill:diagFill,
+          border:{...border(false,true,true,true),...diagBorder}
         });
       }
     });
   });
 
-  const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,"シフト一覧");
+  // 結合セル設定
+  ws["!merges"]=merges;
+
+  // 列幅・行高さ
+  ws["!cols"]=[{wch:5},{wch:5},...sl.map(()=>({wch:7}))];
+  const rowH=[{hpt:20}]; // ヘッダー行
+  for(let i=0;i<dates.length;i++){rowH.push({hpt:15});rowH.push({hpt:15});}
+  ws["!rows"]=rowH;
+
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,"シフト一覧");
   const lb=p.label.slice(0,20).replace(/ /g,"_"),t=new Date();
   XLSX.writeFile(wb,`shift_${lb}_${t.getFullYear()}${String(t.getMonth()+1).padStart(2,"0")}${String(t.getDate()).padStart(2,"0")}.xlsx`);
   tt("✅ Excelをダウンロードしました");
