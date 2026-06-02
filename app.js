@@ -1,7 +1,67 @@
 // ============================================================
-// シフト管理システム v5 - 完全版
+// シフト管理システム v6 - Firebase リアルタイム同期版
 // ============================================================
 const {useState,useEffect,useCallback,useRef,useMemo}=React;
+
+// ============================================================
+// ★ Firebase 設定 ★
+// Firebase Console で取得した設定を以下に貼り付けてください
+// https://console.firebase.google.com
+// ============================================================
+const FIREBASE_CONFIG = {
+  apiKey:            "AIzaSyDdl1Li3QduufAFhBWcF4nmOlFcCsx8zlQ",
+  authDomain:        "ontheshift.firebaseapp.com",
+  databaseURL:       "https://ontheshift-default-rtdb.firebaseio.com",
+  projectId:         "ontheshift",
+  storageBucket:     "ontheshift.firebasestorage.app",
+  messagingSenderId: "29720860733",
+  appId:             "1:29720860733:web:94aec772f4cddcb1287254",
+  measurementId:     "G-P8RP0TG9JG"
+};
+// ============================================================
+
+// Firebase SDK の初期化
+let firebaseDB = null;
+let firebaseEnabled = false;
+
+function initFirebase() {
+  try {
+    if (typeof firebase === "undefined") { console.warn("Firebase SDK未読込み"); return; }
+    if (!firebase.apps || firebase.apps.length === 0) {
+      firebase.initializeApp(FIREBASE_CONFIG);
+    }
+    firebaseDB = firebase.database();
+    // 接続確認
+    firebaseDB.ref(".info/connected").on("value", snap => {
+      firebaseEnabled = snap.val() === true;
+      console.log("Firebase:", firebaseEnabled ? "接続済み" : "切断中");
+    });
+  } catch(e) {
+    console.warn("Firebase初期化失敗:", e.message);
+    firebaseEnabled = false;
+  }
+}
+
+// Firebase パス生成（店舗ID + キー）
+function fbPath(shopId, key) { return `shops/${shopId}/${key}`; }
+
+// Firebase への書き込み（失敗時はlocalStorageにフォールバック）
+function fbSet(path, val) {
+  if (firebaseEnabled && firebaseDB) {
+    return firebaseDB.ref(path).set(val).catch(e => console.warn("fbSet失敗:", e));
+  }
+  return Promise.resolve();
+}
+
+// Firebase のリアルタイム購読（onValue）
+function fbOn(path, cb) {
+  if (firebaseEnabled && firebaseDB) {
+    const ref = firebaseDB.ref(path);
+    ref.on("value", snap => cb(snap.val()));
+    return () => ref.off("value");
+  }
+  return () => {};
+}
 
 // ===== 定数 =====
 const WD=["日","月","火","水","木","金","土"];
@@ -67,54 +127,98 @@ function setPeriodIdToUrl(pid){
 // メインアプリ
 // ============================================================
 function App(){
-  // 店舗一覧
+  const[fbReady,setFbReady]=useState(false);
+  const[syncStatus,setSyncStatus]=useState("init"); // "init"|"online"|"offline"|"no_config"
+
+  // Firebase初期化
+  useEffect(()=>{
+    const isConfigured = FIREBASE_CONFIG.apiKey !== "YOUR_API_KEY";
+    if(!isConfigured){ setSyncStatus("no_config"); setFbReady(true); return; }
+    initFirebase();
+    // 接続状態監視
+    const checkInterval = setInterval(()=>{
+      if(firebaseEnabled!==undefined){ setSyncStatus(firebaseEnabled?"online":"offline"); }
+    },1000);
+    setFbReady(true);
+    return ()=>clearInterval(checkInterval);
+  },[]);
+
+  // 店舗一覧（localStorageのみ）
   const[shops,setShops]=useState(()=>{
-    const s=lg("shift_shops_v5",null);
+    const s=lg("shift_shops_v6",null);
     if(s&&s.length>0)return s;
-    const sh=makeShop("メイン店舗");
-    ls("shift_shops_v5",[sh]);
-    return[sh];
+    const sh=makeShop("メイン店舗");ls("shift_shops_v6",[sh]);return[sh];
   });
   const[currentShopId,setCurrentShopId]=useState(()=>{
-    const s=lg("shift_shops_v5",null);
-    return(s&&s.length>0)?s[0].id:null;
+    const s=lg("shift_shops_v6",null);return(s&&s.length>0)?s[0].id:null;
   });
   const[view,setView]=useState("staff");
   const[auth,setAuth]=useState(false);
-  const[shopMenuOpen,setShopMenuOpen]=useState(false);
 
   const shop=shops.find(s=>s.id===currentShopId)||shops[0];
   const sid=shop?.id||"default";
 
-  // 設定（店舗別）
-  const[settings,setSettings]=useState(()=>lg(storeKey(sid,"settings_v5"),makeSettings(sid)));
-  // 期間一覧（店舗別）
+  // 各データ（Firebase優先、フォールバックはlocalStorage）
+  const[settings,setSettings]=useState(()=>lg(storeKey(sid,"settings_v6"),makeSettings(sid)));
   const[periods,setPeriods]=useState(()=>{
-    const s=lg(storeKey(sid,"periods_v5"),null);
+    const s=lg(storeKey(sid,"periods_v6"),null);
     if(s&&s.length>0)return s;
-    const p=makePeriod(sid);ls(storeKey(sid,"periods_v5"),[p]);return[p];
+    const p=makePeriod(sid);ls(storeKey(sid,"periods_v6"),[p]);return[p];
   });
-  // スタッフ一覧（店舗別）
-  const[staffList,setStaffList]=useState(()=>lg(storeKey(sid,"staff_v5"),[]));
-  // 提出データ（店舗別）
-  const[subs,setSubs]=useState(()=>lg(storeKey(sid,"subs_v5"),[]));
-  // アクティブ期間
+  const[staffList,setStaffList]=useState(()=>lg(storeKey(sid,"staff_v6"),[]));
+  const[subs,setSubs]=useState(()=>lg(storeKey(sid,"subs_v6"),[]));
   const[apid,setApid]=useState(()=>{
     const urlPid=getPeriodIdFromUrl();
     if(urlPid)return urlPid;
-    const s=lg(storeKey(sid,"periods_v5"),null);
+    const s=lg(storeKey(sid,"periods_v6"),null);
     return(s&&s.length>0)?s[0].id:null;
   });
 
-  // 店舗切り替え時に全データリロード
+  // ===== Firebase リアルタイム購読 =====
+  useEffect(()=>{
+    if(!sid||!fbReady)return;
+    const unsubs=[];
+    // settings
+    unsubs.push(fbOn(fbPath(sid,"settings"),val=>{
+      if(val){setSettings(val);ls(storeKey(sid,"settings_v6"),val);}
+    }));
+    // periods
+    unsubs.push(fbOn(fbPath(sid,"periods"),val=>{
+      if(val&&Array.isArray(val)&&val.length>0){
+        setPeriods(val);ls(storeKey(sid,"periods_v6"),val);
+      } else if(val&&typeof val==="object"){
+        const arr=Object.values(val);
+        if(arr.length>0){setPeriods(arr);ls(storeKey(sid,"periods_v6"),arr);}
+      }
+    }));
+    // staff
+    unsubs.push(fbOn(fbPath(sid,"staff"),val=>{
+      if(val){
+        const arr=Array.isArray(val)?val:Object.values(val);
+        setStaffList(arr);ls(storeKey(sid,"staff_v6"),arr);
+      }
+    }));
+    // subs（最重要：リアルタイム同期のコア）
+    unsubs.push(fbOn(fbPath(sid,"subs"),val=>{
+      if(val){
+        const arr=Array.isArray(val)?val:Object.values(val);
+        setSubs(arr);ls(storeKey(sid,"subs_v6"),arr);
+      } else {
+        setSubs([]);ls(storeKey(sid,"subs_v6"),[]);
+      }
+    }));
+    return()=>unsubs.forEach(u=>u&&u());
+  },[sid,fbReady]);
+
+  // 店舗切り替え時にlocalStorageからリロード（Firebaseが拾う前の初期表示用）
   useEffect(()=>{
     if(!sid)return;
-    setSettings(lg(storeKey(sid,"settings_v5"),makeSettings(sid)));
-    const ps=lg(storeKey(sid,"periods_v5"),null);
-    if(ps&&ps.length>0){setPeriods(ps);setApid(ps[0].id);}
-    else{const p=makePeriod(sid);ls(storeKey(sid,"periods_v5"),[p]);setPeriods([p]);setApid(p.id);}
-    setStaffList(lg(storeKey(sid,"staff_v5"),[]));
-    setSubs(lg(storeKey(sid,"subs_v5"),[]));
+    setSettings(lg(storeKey(sid,"settings_v6"),makeSettings(sid)));
+    const ps=lg(storeKey(sid,"periods_v6"),null);
+    if(ps&&ps.length>0){setPeriods(ps);}
+    else{const p=makePeriod(sid);ls(storeKey(sid,"periods_v6"),[p]);setPeriods([p]);}
+    setStaffList(lg(storeKey(sid,"staff_v6"),[]));
+    setSubs(lg(storeKey(sid,"subs_v6"),[]));
   },[sid]);
 
   // URLからperiodId読み込み
@@ -123,25 +227,56 @@ function App(){
     if(urlPid&&periods.find(p=>p.id===urlPid)){setApid(urlPid);setView("staff");}
   },[]);
 
-  const saveSettings=useCallback(s=>{setSettings(s);ls(storeKey(sid,"settings_v5"),s);},[sid]);
-  const savePeriods=useCallback(p=>{setPeriods(p);ls(storeKey(sid,"periods_v5"),p);},[sid]);
-  const saveStaff=useCallback(s=>{setStaffList(s);ls(storeKey(sid,"staff_v5"),s);},[sid]);
-  const saveSubs=useCallback(s=>{setSubs(s);ls(storeKey(sid,"subs_v5"),s);},[sid]);
-  const saveShops=useCallback(s=>{setShops(s);ls("shift_shops_v5",s);},[]);
+  // ===== 保存（Firebase + localStorage二重書き）=====
+  const saveSettings=useCallback(s=>{
+    setSettings(s);ls(storeKey(sid,"settings_v6"),s);
+    fbSet(fbPath(sid,"settings"),s);
+  },[sid]);
+  const savePeriods=useCallback(p=>{
+    setPeriods(p);ls(storeKey(sid,"periods_v6"),p);
+    fbSet(fbPath(sid,"periods"),p);
+  },[sid]);
+  const saveStaff=useCallback(s=>{
+    setStaffList(s);ls(storeKey(sid,"staff_v6"),s);
+    fbSet(fbPath(sid,"staff"),s);
+  },[sid]);
+  const saveSubs=useCallback(s=>{
+    setSubs(s);ls(storeKey(sid,"subs_v6"),s);
+    fbSet(fbPath(sid,"subs"),s);
+  },[sid]);
+  const saveShops=useCallback(s=>{setShops(s);ls("shift_shops_v6",s);},[]);
 
   const ap=periods.find(p=>p.id===apid)||periods[0];
 
+  // 同期ステータスバッジ
+  const syncBadge = syncStatus==="online"
+    ? {bg:"#06C755",text:"🔴 ライブ同期中"}
+    : syncStatus==="offline"
+    ? {bg:"#F59E0B",text:"⚠️ オフライン"}
+    : syncStatus==="no_config"
+    ? {bg:"#6B7280",text:"⚙️ Firebase未設定"}
+    : null;
+
   return(
     <div style={{fontFamily:"'Hiragino Sans','Yu Gothic',sans-serif",minHeight:"100vh",background:view==="admin"?"#1A1A2E":"#F0F2F5"}}>
+      {/* 同期ステータスバー */}
+      {syncBadge&&<div style={{background:syncBadge.bg,color:"white",fontSize:11,fontWeight:700,textAlign:"center",padding:"4px 0",letterSpacing:".03em"}}>{syncBadge.text}</div>}
       {/* タブ */}
       <div style={{display:"flex",position:"sticky",top:0,zIndex:100,boxShadow:"0 2px 8px rgba(0,0,0,.15)"}}>
         <button onClick={()=>setView("staff")} style={{flex:1,padding:"13px 0",border:"none",cursor:"pointer",fontSize:14,fontWeight:700,background:view==="staff"?"#06C755":"#1A1A2E",color:"white"}}>📅 スタッフ画面</button>
         <button onClick={()=>setView("admin")} style={{flex:1,padding:"13px 0",border:"none",cursor:"pointer",fontSize:14,fontWeight:700,background:view==="admin"?"#16213E":"#111827",color:"white"}}>⚙️ 管理者画面</button>
       </div>
       {view==="staff"
-        ?<StaffView periods={periods} ap={ap} apid={apid} settings={settings} subs={subs} staffList={staffList} onSub={sub=>{const a=[...subs];const i=a.findIndex(s=>s.staffName===sub.staffName&&s.periodId===sub.periodId);if(i>=0)a[i]=sub;else a.push(sub);saveSubs(a);}} shopName={shop?.name}/>
+        ?<StaffView periods={periods} ap={ap} apid={apid} settings={settings} subs={subs} staffList={staffList}
+            onSub={sub=>{
+              const a=[...subs];const i=a.findIndex(s=>s.staffName===sub.staffName&&s.periodId===sub.periodId);
+              if(i>=0)a[i]=sub;else a.push(sub);saveSubs(a);
+            }} shopName={shop?.name}/>
         :auth
-          ?<AdminView settings={settings} periods={periods} subs={subs} staffList={staffList} shops={shops} currentShopId={sid} saveSettings={saveSettings} savePeriods={savePeriods} saveSubs={saveSubs} saveStaff={saveStaff} saveShops={saveShops} setCurrentShopId={id=>{setCurrentShopId(id);}} logout={()=>setAuth(false)}/>
+          ?<AdminView settings={settings} periods={periods} subs={subs} staffList={staffList} shops={shops}
+              currentShopId={sid} saveSettings={saveSettings} savePeriods={savePeriods} saveSubs={saveSubs}
+              saveStaff={saveStaff} saveShops={saveShops} setCurrentShopId={id=>setCurrentShopId(id)}
+              logout={()=>setAuth(false)} syncStatus={syncStatus}/>
           :<AdminLogin settings={settings} onAuth={()=>setAuth(true)}/>
       }
     </div>
@@ -586,7 +721,7 @@ function AdminLogin({settings,onAuth}){
 // ============================================================
 // 管理者画面
 // ============================================================
-function AdminView({settings,periods,subs,staffList,shops,currentShopId,saveSettings,savePeriods,saveSubs,saveStaff,saveShops,setCurrentShopId,logout}){
+function AdminView({settings,periods,subs,staffList,shops,currentShopId,saveSettings,savePeriods,saveSubs,saveStaff,saveShops,setCurrentShopId,logout,syncStatus}){
   const[tab,setTab]=useState("periods");
   const[toast,setToast]=useState(null);
   const[shopMenuOpen,setShopMenuOpen]=useState(false);
@@ -650,7 +785,7 @@ function AdminView({settings,periods,subs,staffList,shops,currentShopId,saveSett
         {tab==="staff"&&<StaffTab staffList={staffList} onSave={saveStaff} tt={tt}/>}
         {tab==="candidates"&&<CandTab settings={settings} onSave={saveSettings} tt={tt}/>}
         {tab==="submissions"&&<SubsTab subs={subs} periods={periods} staffList={staffList} onSave={saveSubs} tt={tt}/>}
-        {tab==="settings"&&<SetTab settings={settings} onSave={saveSettings} subs={subs} saveSubs={saveSubs} tt={tt}/>}
+        {tab==="settings"&&<SetTab settings={settings} onSave={saveSettings} subs={subs} saveSubs={saveSubs} tt={tt} syncStatus={syncStatus}/>}
       </div>
       {toast&&<div style={{position:"fixed",bottom:24,left:"50%",transform:"translateX(-50%)",background:"rgba(255,255,255,.12)",backdropFilter:"blur(10px)",color:"white",padding:"10px 20px",borderRadius:24,fontSize:14,fontWeight:500,zIndex:999,border:"1px solid rgba(255,255,255,.15)"}}>{toast}</div>}
     </div>
@@ -1107,7 +1242,7 @@ function SubsTab({subs,periods,staffList,onSave,tt}){
 }
 
 // ===== 設定タブ =====
-function SetTab({settings,onSave,subs,saveSubs,tt}){
+function SetTab({settings,onSave,subs,saveSubs,tt,syncStatus}){
   const[pw,setPw]=useState("");
   // データエクスポート（JSON）
   const exportData=()=>{
@@ -1142,6 +1277,26 @@ function SetTab({settings,onSave,subs,saveSubs,tt}){
   };
   return(<div>
     <AT>⚙️ システム設定</AT>
+    <AC title="🔴 リアルタイム同期（Firebase）">
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14,padding:"12px 14px",background:"rgba(255,255,255,.05)",borderRadius:10}}>
+        <div style={{width:10,height:10,borderRadius:"50%",background:syncStatus==="online"?"#06C755":syncStatus==="offline"?"#F59E0B":"#6B7280",flexShrink:0}}/>
+        <div>
+          <div style={{fontSize:13,fontWeight:700,color:"white"}}>
+            {syncStatus==="online"?"接続中 — リアルタイム同期中":syncStatus==="offline"?"オフライン — ローカル保存中":"Firebase未設定 — ローカル保存中"}
+          </div>
+          <div style={{fontSize:11,color:"rgba(255,255,255,.4)",marginTop:2}}>
+            {syncStatus==="no_config"?"app.js の FIREBASE_CONFIG に設定を貼り付けてください":"全端末の変更が即座に反映されます"}
+          </div>
+        </div>
+      </div>
+      {syncStatus==="no_config"&&<div style={{fontSize:12,color:"rgba(255,255,255,.5)",lineHeight:1.8,padding:"10px 14px",background:"rgba(255,255,255,.04)",borderRadius:8}}>
+        <strong style={{color:"white"}}>設定手順：</strong><br/>
+        1. <a href="https://console.firebase.google.com" target="_blank" style={{color:"#60A5FA"}}>Firebase Console</a> でプロジェクトを作成<br/>
+        2. 「Realtime Database」を作成（テストモードで開始）<br/>
+        3. プロジェクト設定 → マイアプリ → SDK設定からconfigをコピー<br/>
+        4. app.js の FIREBASE_CONFIG に貼り付けて保存
+      </div>}
+    </AC>
     <AC title="🔐 パスワード変更">
       <AL>新しいパスワード</AL>
       <input type="password" value={pw} onChange={e=>setPw(e.target.value)} placeholder="新しいパスワードを入力" style={{...AI,maxWidth:280}}/>
