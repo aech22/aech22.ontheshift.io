@@ -187,7 +187,7 @@ function App(){
   const[shops,setShops]=useState([]);
   const[currentShopId,setCurrentShopId]=useState(null);
   const[view,setView]=useState("staff");
-  const[auth,setAuth]=useState(false);
+  const[auth,setAuth]=useState(true); // パスワード廃止
   const[settings,setSettings]=useState(null);
   const[periods,setPeriods]=useState([]);
   const[staffList,setStaffList]=useState([]);
@@ -466,7 +466,7 @@ function App(){
               currentShopId={sid} saveSettings={saveSettings} savePeriods={savePeriods} saveSubs={saveSubs}
               saveStaff={saveStaff} saveShops={saveShops} setCurrentShopId={id=>setCurrentShopId(id)}
               logout={()=>setAuth(false)} syncStatus={syncStatus}/>
-          :<AdminLogin settings={effectiveSettings} onAuth={()=>setAuth(true)}/>)
+          :null)
       }
     </div>
   );
@@ -1626,12 +1626,7 @@ function SetTab({settings,onSave,subs,saveSubs,tt,syncStatus}){
         4. app.js の FIREBASE_CONFIG に貼り付けて保存
       </div>}
     </AC>
-    <AC title="🔐 パスワード変更">
-      <AL>新しいパスワード</AL>
-      <input type="password" value={pw} onChange={e=>setPw(e.target.value)} placeholder="新しいパスワードを入力" style={{...AI,maxWidth:280}}/>
-      <div style={{fontSize:12,color:"rgba(255,255,255,.35)",marginTop:4}}>初期パスワード: admin1234</div>
-      <div style={{marginTop:12}}><button onClick={()=>{if(!pw){tt("⚠️ 入力してください");return;}onSave({...settings,password:pw});setPw("");tt("✅ 変更しました");}} style={AB}>🔐 変更する</button></div>
-    </AC>
+
     <AC title="📤 データ統合（別端末との同期）">
       <div style={{fontSize:13,color:"rgba(255,255,255,.5)",marginBottom:14,lineHeight:1.7}}>
         別の端末（スマホ・PC）で提出されたデータを統合するには：<br/>
