@@ -131,14 +131,60 @@ function makeSettings(shopId){
   return{shopId,password:DEFAULT_PW,candidates:CAND_WEEKDAY,weekdayCandidates:{0:CAND_WEEKEND,6:CAND_WEEKEND},dateCandidates:{},templates:[]};
 }
 
-// ===== URLハッシュからプロジェクトIDを取得 =====
-function getPeriodIdFromUrl(){
-  const h=window.location.hash;
-  if(h.startsWith("#p="))return h.slice(3);
+// ===== URL スラッグ生成 =====
+// 期間のstartDateとlabelから YYYYMM + first/latter を生成
+function makePeriodSlug(period){
+  if(!period||!period.startDate)return null;
+  const d=pd(period.startDate);
+  const ym=`${d.getFullYear()}${String(d.getMonth()+1).padStart(2,"0")}`;
+  // 後半判定: 開始日が16日以降 or ラベルに「後半」を含む
+  const isLatter = d.getDate()>=16 || (period.label&&period.label.includes("後半"));
+  return ym+(isLatter?"latter":"first");
+}
+
+// URL形式: #/<shopId>/<slug>  例: #/shop_123/202506first
+function parseUrl(){
+  const h=window.location.hash; // "#/shop_xxx/202506first"
+  if(h.startsWith("#/")){
+    const parts=h.slice(2).split("/");
+    if(parts.length>=2) return {shopId:parts[0],slug:parts[1]};
+    if(parts.length===1&&parts[0]) return {shopId:null,slug:parts[0]};
+  }
+  // 旧形式互換
+  if(h.startsWith("#p=")) return {shopId:null,slug:null,legacyPid:h.slice(3)};
   return null;
 }
-function setPeriodIdToUrl(pid){
-  window.location.hash=pid?`#p=${pid}`:"";
+
+function buildUrl(shopId, period){
+  const slug=makePeriodSlug(period);
+  if(!shopId||!slug)return "";
+  return `${window.location.origin}${window.location.pathname}#/${shopId}/${slug}`;
+}
+
+function setUrl(shopId, period){
+  const slug=makePeriodSlug(period);
+  if(shopId&&slug) window.location.hash=`/${shopId}/${slug}`;
+}
+
+// URLからperiodIdを解決（shops/periodsリストが必要）
+function resolvePeriodFromUrl(shops,allPeriods){
+  const parsed=parseUrl();
+  if(!parsed)return null;
+  // 旧形式
+  if(parsed.legacyPid){
+    const found=allPeriods.find(p=>p.id===parsed.legacyPid);
+    return found?{period:found,shopId:found.shopId||null}:null;
+  }
+  if(!parsed.slug)return null;
+  // shopId指定あり
+  let targetShops=shops;
+  if(parsed.shopId) targetShops=shops.filter(s=>s.id===parsed.shopId);
+  // slugでperiodを検索
+  for(const shop of targetShops){
+    const found=allPeriods.find(p=>(p.shopId===shop.id||!p.shopId)&&makePeriodSlug(p)===parsed.slug);
+    if(found)return {period:found,shopId:shop.id};
+  }
+  return null;
 }
 
 // ============================================================
@@ -195,15 +241,25 @@ function App(){
   const[staffList,setStaffList]=useState(()=>lg(storeKey(sid,"staff_v6"),[]));
   const[subs,setSubs]=useState(()=>lg(storeKey(sid,"subs_v6"),[]));
   const[apid,setApid]=useState(()=>{
-    const urlPid=getPeriodIdFromUrl();
-    if(urlPid)return urlPid;
+    // URLからperiodを解決（初期化時点ではshops/periodsはlocalStorageから）
+    const allShops=lg("shift_shops_v6",[]);
+    const allPeriods=allShops.flatMap(sh=>lg(storeKey(sh.id,"periods_v6"),[]));
+    const resolved=resolvePeriodFromUrl(allShops,allPeriods);
+    if(resolved)return resolved.period.id;
     const s=lg(storeKey(sid,"periods_v6"),null);
     return(s&&s.length>0)?s[0].id:null;
   });
+  // URLからshopIdも解決して初期店舗を設定
+  const[urlShopResolved,setUrlShopResolved]=useState(false);
 
   // ===== Firebase リアルタイム購読 =====
   useEffect(()=>{
-    if(!sid||!fbReady||!firebaseDB)return;
+    if(!sid||!fbReady)return;
+    // firebaseDBがまだなければ少し待って再試行
+    if(!firebaseDB){
+      const t=setTimeout(()=>{},500);
+      return()=>clearTimeout(t);
+    }
     console.log("Firebase購読開始 shopId:", sid);
     const unsubs=[];
 
@@ -249,7 +305,7 @@ function App(){
       console.log("Firebase購読解除 shopId:", sid);
       unsubs.forEach(u=>u&&u());
     };
-  },[sid,fbReady,syncStatus]); // syncStatusが"online"になったら再購読
+  },[sid,fbReady]); // fbReadyになったら購読開始（syncStatus依存を削除）
 
   // 店舗切り替え時にlocalStorageからリロード（Firebaseが拾う前の初期表示用）
   useEffect(()=>{
@@ -262,11 +318,28 @@ function App(){
     setSubs(lg(storeKey(sid,"subs_v6"),[]));
   },[sid]);
 
-  // URLからperiodId読み込み
+  // URLからshopId+periodを解決
   useEffect(()=>{
-    const urlPid=getPeriodIdFromUrl();
-    if(urlPid&&periods.find(p=>p.id===urlPid)){setApid(urlPid);setView("staff");}
-  },[]);
+    if(urlShopResolved)return;
+    const parsed=parseUrl();
+    if(!parsed){setUrlShopResolved(true);return;}
+    // shopId解決
+    if(parsed.shopId){
+      const targetShop=shops.find(s=>s.id===parsed.shopId);
+      if(targetShop&&targetShop.id!==sid){
+        setCurrentShopId(targetShop.id);
+        setUrlShopResolved(true);
+        return;
+      }
+    }
+    // period解決
+    const resolved=resolvePeriodFromUrl(shops,periods);
+    if(resolved){
+      setApid(resolved.period.id);
+      setView("staff");
+    }
+    setUrlShopResolved(true);
+  },[shops,periods,urlShopResolved]);
 
   // ===== 保存（Firebase + localStorage二重書き）=====
   const saveSettings=useCallback(s=>{
@@ -308,7 +381,7 @@ function App(){
         <button onClick={()=>setView("admin")} style={{flex:1,padding:"13px 0",border:"none",cursor:"pointer",fontSize:14,fontWeight:700,background:view==="admin"?"#16213E":"#111827",color:"white"}}>⚙️ 管理者画面</button>
       </div>
       {view==="staff"
-        ?<StaffView periods={periods} ap={ap} apid={apid} setApid={setApid} settings={settings} subs={subs} staffList={staffList}
+        ?<StaffView periods={periods} ap={ap} apid={apid} setApid={setApid} shopId={sid} settings={settings} subs={subs} staffList={staffList}
             onSub={sub=>{
               const a=[...subs];const i=a.findIndex(s=>s.staffName===sub.staffName&&s.periodId===sub.periodId);
               if(i>=0)a[i]=sub;else a.push(sub);saveSubs(a);
@@ -327,7 +400,7 @@ function App(){
 // ============================================================
 // スタッフ画面
 // ============================================================
-function StaffView({periods,ap,apid,setApid,settings,subs,staffList,onSub,shopName}){
+function StaffView({periods,ap,apid,setApid,shopId,settings,subs,staffList,onSub,shopName}){
   const[name,setName]=useState("");
   const[sd,setSd]=useState({});
   const[done,setDone]=useState(false);
@@ -382,7 +455,7 @@ function StaffView({periods,ap,apid,setApid,settings,subs,staffList,onSub,shopNa
 
   if(done)return(
     <div style={{background:"#F0F2F5",minHeight:"calc(100vh - 44px)"}}>
-      <StaffHdr ap={ap} p0={p0} pe={pe} nd={dates.length} subs={subs} apid={apid} onSm={()=>setSm(true)} shopName={shopName} periods={periods} onChangePeriod={id=>{setApid(id);const p=periods.find(pp=>pp.id===id);if(p){const i={};gd(p.startDate,p.endDate).forEach(d=>{i[d]={status:"holiday"};});setSd(i);setDone(false);setComment("");}}}/>
+      <StaffHdr ap={ap} p0={p0} pe={pe} nd={dates.length} subs={subs} apid={apid} onSm={()=>setSm(true)} shopName={shopName} periods={periods} onChangePeriod={id=>{setApid(id);const p=periods.find(pp=>pp.id===id);if(p){const i={};gd(p.startDate,p.endDate).forEach(d=>{i[d]={status:"holiday"};});setSd(i);setDone(false);setComment("");setUrl(shopId,p);}}}/>
       {sm&&<SmModal subs={subs} periods={periods} apid={apid} onClose={()=>setSm(false)} staffList={staffList} onEditSub={sub=>{onSub(sub);}}/>}
       <div style={{maxWidth:560,margin:"0 auto",padding:"50px 20px",textAlign:"center"}}>
         <div style={{fontSize:68,animation:"bI .5s"}}>✅</div>
@@ -403,7 +476,7 @@ function StaffView({periods,ap,apid,setApid,settings,subs,staffList,onSub,shopNa
 
   return(
     <div style={{background:"#F0F2F5",minHeight:"calc(100vh - 44px)"}}>
-      <StaffHdr ap={ap} p0={p0} pe={pe} nd={dates.length} subs={subs} apid={apid} onSm={()=>setSm(true)} shopName={shopName} periods={periods} onChangePeriod={id=>{setApid(id);const p=periods.find(pp=>pp.id===id);if(p){const i={};gd(p.startDate,p.endDate).forEach(d=>{i[d]={status:"holiday"};});setSd(i);setDone(false);setComment("");}}}/>
+      <StaffHdr ap={ap} p0={p0} pe={pe} nd={dates.length} subs={subs} apid={apid} onSm={()=>setSm(true)} shopName={shopName} periods={periods} onChangePeriod={id=>{setApid(id);const p=periods.find(pp=>pp.id===id);if(p){const i={};gd(p.startDate,p.endDate).forEach(d=>{i[d]={status:"holiday"};});setSd(i);setDone(false);setComment("");setUrl(shopId,p);}}}/>
       {sm&&<SmModal subs={subs} periods={periods} apid={apid} onClose={()=>setSm(false)} staffList={staffList} onEditSub={sub=>{onSub(sub);}}/>}
       <div style={{maxWidth:560,margin:"0 auto",padding:"14px 12px 120px"}}>
         {ap?.deadlineDate&&<div style={{background:dl?"#FFF0F1":"#FFFBEB",border:`1px solid ${dl?"#FF4757":"#FCD34D"}`,borderRadius:10,padding:"10px 14px",marginBottom:12,fontSize:13,fontWeight:700,color:dl?"#FF4757":"#92400E"}}>{dl?`⚠️ 締切済み（${ap.deadlineDate.replace(/-/g,"/")}）`:`📅 締切日：${ap.deadlineDate.replace(/-/g,"/")}`}</div>}
@@ -555,7 +628,7 @@ function StaffView({periods,ap,apid,setApid,settings,subs,staffList,onSub,shopNa
 }
 
 // ===== スタッフヘッダー =====
-function StaffHdr({ap,p0,pe,nd,subs,apid,onSm,shopName,periods,onChangePeriod}){
+function StaffHdr({ap,p0,pe,nd,subs,apid,onSm,shopName,periods,onChangePeriod,urlLocked}){
   const submitted=subs.filter(s=>s.periodId===apid);
   const[periodMenu,setPeriodMenu]=useState(false);
   const menuRef=useRef();
@@ -572,10 +645,10 @@ function StaffHdr({ap,p0,pe,nd,subs,apid,onSm,shopName,periods,onChangePeriod}){
             <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
               {shopName&&<span style={{fontSize:11,background:"rgba(255,255,255,.25)",color:"white",padding:"1px 7px",borderRadius:10,fontWeight:700,whiteSpace:"nowrap"}}>{shopName}</span>}
               {/* プロジェクト名クリックでプロジェクト切り替えメニュー */}
-              <button onClick={()=>periods&&periods.length>1&&setPeriodMenu(v=>!v)}
-                style={{fontSize:15,fontWeight:700,color:"white",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",background:"none",border:"none",cursor:periods&&periods.length>1?"pointer":"default",padding:0,display:"flex",alignItems:"center",gap:4}}>
+              <button onClick={()=>!urlLocked&&periods&&periods.length>1&&setPeriodMenu(v=>!v)}
+                style={{fontSize:15,fontWeight:700,color:"white",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",background:"none",border:"none",cursor:(!urlLocked&&periods&&periods.length>1)?"pointer":"default",padding:0,display:"flex",alignItems:"center",gap:4}}>
                 {ap?.label||"シフト希望提出"}
-                {periods&&periods.length>1&&<span style={{fontSize:11,opacity:.75}}>▼</span>}
+                {!urlLocked&&periods&&periods.length>1&&<span style={{fontSize:11,opacity:.75}}>▼</span>}
               </button>
             </div>
             <div style={{fontSize:11,color:"rgba(255,255,255,.85)",marginTop:1}}>{p0} 〜 {pe}（{nd}日間）</div>
@@ -892,7 +965,7 @@ function PeriodsTab({periods,subs,staffList,onSave,tt,shopId}){
 
       {[...periods].reverse().map(p=>{
         const dates=gd(p.startDate,p.endDate),ip=idp(p.deadlineDate);
-        const pUrl=`${window.location.origin}${window.location.pathname}#p=${p.id}`;
+        const pUrl=buildUrl(shopId,p);
         return(
           <div key={p.id} style={{background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.08)",borderRadius:14,padding:18,marginBottom:12,cursor:"pointer"}} onClick={e=>{if(e.target.tagName==="BUTTON"||e.target.closest("button"))return;setViewPeriodId(p.id);}}>
             {eid===p.id
