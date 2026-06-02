@@ -301,14 +301,14 @@ function App(){
   return(
     <div style={{fontFamily:"'Hiragino Sans','Yu Gothic',sans-serif",minHeight:"100vh",background:view==="admin"?"#1A1A2E":"#F0F2F5"}}>
       {/* 同期ステータスバー */}
-      <div style={{background:syncBadge.bg,color:"white",fontSize:11,fontWeight:700,textAlign:"center",padding:"4px 0",letterSpacing:".03em",transition:"background .5s"}}>{syncBadge.text}</div>
+      {/* Firebase同期バッジ非表示 */}
       {/* タブ */}
       <div style={{display:"flex",position:"sticky",top:0,zIndex:100,boxShadow:"0 2px 8px rgba(0,0,0,.15)"}}>
         <button onClick={()=>setView("staff")} style={{flex:1,padding:"13px 0",border:"none",cursor:"pointer",fontSize:14,fontWeight:700,background:view==="staff"?"#06C755":"#1A1A2E",color:"white"}}>📅 スタッフ画面</button>
         <button onClick={()=>setView("admin")} style={{flex:1,padding:"13px 0",border:"none",cursor:"pointer",fontSize:14,fontWeight:700,background:view==="admin"?"#16213E":"#111827",color:"white"}}>⚙️ 管理者画面</button>
       </div>
       {view==="staff"
-        ?<StaffView periods={periods} ap={ap} apid={apid} settings={settings} subs={subs} staffList={staffList}
+        ?<StaffView periods={periods} ap={ap} apid={apid} setApid={setApid} settings={settings} subs={subs} staffList={staffList}
             onSub={sub=>{
               const a=[...subs];const i=a.findIndex(s=>s.staffName===sub.staffName&&s.periodId===sub.periodId);
               if(i>=0)a[i]=sub;else a.push(sub);saveSubs(a);
@@ -327,7 +327,7 @@ function App(){
 // ============================================================
 // スタッフ画面
 // ============================================================
-function StaffView({periods,ap,apid,settings,subs,staffList,onSub,shopName}){
+function StaffView({periods,ap,apid,setApid,settings,subs,staffList,onSub,shopName}){
   const[name,setName]=useState("");
   const[sd,setSd]=useState({});
   const[done,setDone]=useState(false);
@@ -382,7 +382,7 @@ function StaffView({periods,ap,apid,settings,subs,staffList,onSub,shopName}){
 
   if(done)return(
     <div style={{background:"#F0F2F5",minHeight:"calc(100vh - 44px)"}}>
-      <StaffHdr ap={ap} p0={p0} pe={pe} nd={dates.length} subs={subs} apid={apid} onSm={()=>setSm(true)} shopName={shopName} periods={periods} onChangePeriod={id=>{const p=periods.find(pp=>pp.id===id);if(p){const i={};gd(p.startDate,p.endDate).forEach(d=>{i[d]={status:"holiday"};});setSd(i);setDone(false);setComment("");}}}/>
+      <StaffHdr ap={ap} p0={p0} pe={pe} nd={dates.length} subs={subs} apid={apid} onSm={()=>setSm(true)} shopName={shopName} periods={periods} onChangePeriod={id=>{setApid(id);const p=periods.find(pp=>pp.id===id);if(p){const i={};gd(p.startDate,p.endDate).forEach(d=>{i[d]={status:"holiday"};});setSd(i);setDone(false);setComment("");}}}/>
       {sm&&<SmModal subs={subs} periods={periods} apid={apid} onClose={()=>setSm(false)} staffList={staffList} onEditSub={sub=>{onSub(sub);}}/>}
       <div style={{maxWidth:560,margin:"0 auto",padding:"50px 20px",textAlign:"center"}}>
         <div style={{fontSize:68,animation:"bI .5s"}}>✅</div>
@@ -403,7 +403,7 @@ function StaffView({periods,ap,apid,settings,subs,staffList,onSub,shopName}){
 
   return(
     <div style={{background:"#F0F2F5",minHeight:"calc(100vh - 44px)"}}>
-      <StaffHdr ap={ap} p0={p0} pe={pe} nd={dates.length} subs={subs} apid={apid} onSm={()=>setSm(true)} shopName={shopName} periods={periods} onChangePeriod={id=>{const p=periods.find(pp=>pp.id===id);if(p){const i={};gd(p.startDate,p.endDate).forEach(d=>{i[d]={status:"holiday"};});setSd(i);setDone(false);setComment("");}}}/>
+      <StaffHdr ap={ap} p0={p0} pe={pe} nd={dates.length} subs={subs} apid={apid} onSm={()=>setSm(true)} shopName={shopName} periods={periods} onChangePeriod={id=>{setApid(id);const p=periods.find(pp=>pp.id===id);if(p){const i={};gd(p.startDate,p.endDate).forEach(d=>{i[d]={status:"holiday"};});setSd(i);setDone(false);setComment("");}}}/>
       {sm&&<SmModal subs={subs} periods={periods} apid={apid} onClose={()=>setSm(false)} staffList={staffList} onEditSub={sub=>{onSub(sub);}}/>}
       <div style={{maxWidth:560,margin:"0 auto",padding:"14px 12px 120px"}}>
         {ap?.deadlineDate&&<div style={{background:dl?"#FFF0F1":"#FFFBEB",border:`1px solid ${dl?"#FF4757":"#FCD34D"}`,borderRadius:10,padding:"10px 14px",marginBottom:12,fontSize:13,fontWeight:700,color:dl?"#FF4757":"#92400E"}}>{dl?`⚠️ 締切済み（${ap.deadlineDate.replace(/-/g,"/")}）`:`📅 締切日：${ap.deadlineDate.replace(/-/g,"/")}`}</div>}
