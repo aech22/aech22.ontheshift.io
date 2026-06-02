@@ -1,0 +1,1099 @@
+// ============================================================
+// シフト管理システム v5 - 完全版
+// ============================================================
+const {useState,useEffect,useCallback,useRef,useMemo}=React;
+
+// ===== 定数 =====
+const WD=["日","月","火","水","木","金","土"];
+const JH=[1,6,7,8,11,15,16,23]; // 祝日月日（簡易・毎年共通）
+const DEFAULT_PW="admin1234";
+
+// ===== デフォルト候補時間 =====
+const CAND_WEEKDAY=[
+  {start:"10:00",end:"15:00"},{start:"11:00",end:"15:00"},
+  {start:"17:00",end:"23:00"},{start:"18:00",end:"23:00"},
+  {start:"10:00",end:"23:00"},{start:"11:00",end:"23:00"}
+];
+const CAND_WEEKEND=[
+  {start:"10:00",end:"15:00"},{start:"11:00",end:"15:00"},
+  {start:"10:00",end:"17:00"},{start:"11:00",end:"17:00"},
+  {start:"15:00",end:"23:00"},{start:"17:00",end:"23:00"},
+  {start:"18:00",end:"23:00"},{start:"10:00",end:"23:00"},
+  {start:"11:00",end:"23:00"}
+];
+
+// ===== ユーティリティ =====
+function fd(d){return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;}
+function pd(s){const[y,m,d]=s.split("-").map(Number);return new Date(y,m-1,d);}
+function gd(s,e){const r=[],st=pd(s),en=pd(e);let c=new Date(st);while(c<=en){r.push(fd(c));c.setDate(c.getDate()+1);}return r;}
+function gto(){const o=[];for(let h=0;h<=24;h++){const ms=h===24?[0]:[0,30];for(const m of ms)o.push(`${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`);}return o;}
+const TO=gto();
+function idp(d){return d?new Date()>new Date(d+"T23:59:59"):false;}
+function lg(k,fb){try{const v=localStorage.getItem(k);return v?JSON.parse(v):fb;}catch{return fb;}}
+function ls(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch{}}
+function sc(cs){return[...cs].sort((a,b)=>{const ta=Number(a.start.replace(":","").replace(":","")),tb=Number(b.start.replace(":","").replace(":","")),ea=Number(a.end.replace(":","").replace(":","")),eb=Number(b.end.replace(":","").replace(":",""));return ta!==tb?ta-tb:ea-eb;});}
+// 時刻→数値（Excelフォーマット用）HH:MM → H.5 / H形式
+function timeToNum(t){if(!t)return"";const[h,m]=t.split(":").map(Number);return m===0?h:h+0.5;}
+// 祝日判定（簡易）
+function isHoliday(dateStr){const d=pd(dateStr);const mo=d.getMonth()+1,dy=d.getDate();return JH.some(h=>h===mo*100+dy)||false;}
+function isWeekend(dateStr){const dow=pd(dateStr).getDay();return dow===0||dow===6||isHoliday(dateStr);}
+
+const td=new Date(),tds=fd(td);
+
+// ===== ストレージキー（店舗IDベース）=====
+function storeKey(shopId,key){return`shift_${shopId}_${key}`;}
+
+// ===== 初期データ =====
+function makeShop(name="店舗1"){return{id:`shop_${Date.now()}`,name,createdAt:new Date().toISOString()};}
+function makePeriod(shopId){
+  const yr=td.getFullYear(),mo=td.getMonth()+1,ms=String(mo).padStart(2,"0");
+  return{id:`p_${Date.now()}`,shopId,label:`${yr}年${mo}月前半`,startDate:`${yr}-${ms}-01`,endDate:`${yr}-${ms}-15`,deadlineDate:"",createdAt:new Date().toISOString()};
+}
+function makeSettings(shopId){
+  return{shopId,password:DEFAULT_PW,candidates:CAND_WEEKDAY,weekdayCandidates:{0:CAND_WEEKEND,6:CAND_WEEKEND},dateCandidates:{},templates:[]};
+}
+
+// ===== URLハッシュからプロジェクトIDを取得 =====
+function getPeriodIdFromUrl(){
+  const h=window.location.hash;
+  if(h.startsWith("#p="))return h.slice(3);
+  return null;
+}
+function setPeriodIdToUrl(pid){
+  window.location.hash=pid?`#p=${pid}`:"";
+}
+
+// ============================================================
+// メインアプリ
+// ============================================================
+function App(){
+  // 店舗一覧
+  const[shops,setShops]=useState(()=>{
+    const s=lg("shift_shops_v5",null);
+    if(s&&s.length>0)return s;
+    const sh=makeShop("メイン店舗");
+    ls("shift_shops_v5",[sh]);
+    return[sh];
+  });
+  const[currentShopId,setCurrentShopId]=useState(()=>{
+    const s=lg("shift_shops_v5",null);
+    return(s&&s.length>0)?s[0].id:null;
+  });
+  const[view,setView]=useState("staff");
+  const[auth,setAuth]=useState(false);
+  const[shopMenuOpen,setShopMenuOpen]=useState(false);
+
+  const shop=shops.find(s=>s.id===currentShopId)||shops[0];
+  const sid=shop?.id||"default";
+
+  // 設定（店舗別）
+  const[settings,setSettings]=useState(()=>lg(storeKey(sid,"settings_v5"),makeSettings(sid)));
+  // 期間一覧（店舗別）
+  const[periods,setPeriods]=useState(()=>{
+    const s=lg(storeKey(sid,"periods_v5"),null);
+    if(s&&s.length>0)return s;
+    const p=makePeriod(sid);ls(storeKey(sid,"periods_v5"),[p]);return[p];
+  });
+  // スタッフ一覧（店舗別）
+  const[staffList,setStaffList]=useState(()=>lg(storeKey(sid,"staff_v5"),[]));
+  // 提出データ（店舗別）
+  const[subs,setSubs]=useState(()=>lg(storeKey(sid,"subs_v5"),[]));
+  // アクティブ期間
+  const[apid,setApid]=useState(()=>{
+    const urlPid=getPeriodIdFromUrl();
+    if(urlPid)return urlPid;
+    const s=lg(storeKey(sid,"periods_v5"),null);
+    return(s&&s.length>0)?s[0].id:null;
+  });
+
+  // 店舗切り替え時に全データリロード
+  useEffect(()=>{
+    if(!sid)return;
+    setSettings(lg(storeKey(sid,"settings_v5"),makeSettings(sid)));
+    const ps=lg(storeKey(sid,"periods_v5"),null);
+    if(ps&&ps.length>0){setPeriods(ps);setApid(ps[0].id);}
+    else{const p=makePeriod(sid);ls(storeKey(sid,"periods_v5"),[p]);setPeriods([p]);setApid(p.id);}
+    setStaffList(lg(storeKey(sid,"staff_v5"),[]));
+    setSubs(lg(storeKey(sid,"subs_v5"),[]));
+  },[sid]);
+
+  // URLからperiodId読み込み
+  useEffect(()=>{
+    const urlPid=getPeriodIdFromUrl();
+    if(urlPid&&periods.find(p=>p.id===urlPid)){setApid(urlPid);setView("staff");}
+  },[]);
+
+  const saveSettings=useCallback(s=>{setSettings(s);ls(storeKey(sid,"settings_v5"),s);},[sid]);
+  const savePeriods=useCallback(p=>{setPeriods(p);ls(storeKey(sid,"periods_v5"),p);},[sid]);
+  const saveStaff=useCallback(s=>{setStaffList(s);ls(storeKey(sid,"staff_v5"),s);},[sid]);
+  const saveSubs=useCallback(s=>{setSubs(s);ls(storeKey(sid,"subs_v5"),s);},[sid]);
+  const saveShops=useCallback(s=>{setShops(s);ls("shift_shops_v5",s);},[]);
+
+  const ap=periods.find(p=>p.id===apid)||periods[0];
+
+  return(
+    <div style={{fontFamily:"'Hiragino Sans','Yu Gothic',sans-serif",minHeight:"100vh",background:view==="admin"?"#1A1A2E":"#F0F2F5"}}>
+      {/* タブ */}
+      <div style={{display:"flex",position:"sticky",top:0,zIndex:100,boxShadow:"0 2px 8px rgba(0,0,0,.15)"}}>
+        <button onClick={()=>setView("staff")} style={{flex:1,padding:"13px 0",border:"none",cursor:"pointer",fontSize:14,fontWeight:700,background:view==="staff"?"#06C755":"#1A1A2E",color:"white"}}>📅 スタッフ画面</button>
+        <button onClick={()=>setView("admin")} style={{flex:1,padding:"13px 0",border:"none",cursor:"pointer",fontSize:14,fontWeight:700,background:view==="admin"?"#16213E":"#111827",color:"white"}}>⚙️ 管理者画面</button>
+      </div>
+      {view==="staff"
+        ?<StaffView periods={periods} ap={ap} apid={apid} settings={settings} subs={subs} staffList={staffList} onSub={sub=>{const a=[...subs];const i=a.findIndex(s=>s.staffName===sub.staffName&&s.periodId===sub.periodId);if(i>=0)a[i]=sub;else a.push(sub);saveSubs(a);}} shopName={shop?.name}/>
+        :auth
+          ?<AdminView settings={settings} periods={periods} subs={subs} staffList={staffList} shops={shops} currentShopId={sid} saveSettings={saveSettings} savePeriods={savePeriods} saveSubs={saveSubs} saveStaff={saveStaff} saveShops={saveShops} setCurrentShopId={id=>{setCurrentShopId(id);}} logout={()=>setAuth(false)}/>
+          :<AdminLogin settings={settings} onAuth={()=>setAuth(true)}/>
+      }
+    </div>
+  );
+}
+
+// ============================================================
+// スタッフ画面
+// ============================================================
+function StaffView({periods,ap,apid,settings,subs,staffList,onSub,shopName}){
+  const[name,setName]=useState(()=>lg("shift_staff_name_v5",""));
+  const[sd,setSd]=useState({});
+  const[done,setDone]=useState(false);
+  const[conf,setConf]=useState(false);
+  const[toast,setToast]=useState(null);
+  const[sm,setSm]=useState(false);
+  const[comment,setComment]=useState("");
+  const[editN,setEditN]=useState(false);
+  const[ni,setNi]=useState("");
+  const[showSuggest,setShowSuggest]=useState(false);
+  const tr=useRef(),nr=useRef(),nameWrapRef=useRef();
+  const dl=idp(ap?.deadlineDate);
+  const dates=ap?gd(ap.startDate,ap.endDate):[];
+
+  useEffect(()=>{ls("shift_staff_name_v5",name);},[name]);
+  useEffect(()=>{
+    const i={};dates.forEach(d=>{i[d]={status:"holiday"};});
+    setSd(i);setDone(false);setComment("");
+  },[apid,ap?.startDate,ap?.endDate]);
+
+  const tt_=m=>{setToast(m);clearTimeout(tr.current);tr.current=setTimeout(()=>setToast(null),2500);};
+  const upd=(ds,u)=>setSd(p=>({...p,[ds]:{...p[ds],...u}}));
+  const reset=()=>{const i={};dates.forEach(d=>{i[d]={status:"holiday"};});setSd(i);setDone(false);setComment("");tt_("🔄 リセットしました");};
+
+  // 候補取得（日付別→曜日別→デフォルト）
+  const gc=ds=>{
+    const dc=(settings.dateCandidates||{})[ds];if(dc&&dc.length>0)return dc;
+    const dow=pd(ds).getDay();
+    if(isWeekend(ds)){const wdc=(settings.weekdayCandidates||{})[dow]||[];if(wdc.length>0)return wdc;return CAND_WEEKEND;}
+    const wdc=(settings.weekdayCandidates||{})[dow]||[];if(wdc.length>0)return wdc;
+    return settings.candidates||CAND_WEEKDAY;
+  };
+
+  const submit=()=>{
+    const sub={id:Date.now().toString(),periodId:apid,staffName:name.trim(),submittedAt:new Date().toISOString(),shifts:Object.fromEntries(dates.map(d=>[d,sd[d]||{status:"holiday"}])),comment:comment.trim()};
+    onSub(sub);setDone(true);setConf(false);
+  };
+
+  const p0=dates[0]?`${pd(dates[0]).getMonth()+1}/${pd(dates[0]).getDate()}`:"";
+  const pe=dates[dates.length-1]?`${pd(dates[dates.length-1]).getMonth()+1}/${pd(dates[dates.length-1]).getDate()}`:"";
+  const wk=dates.filter(d=>sd[d]?.status==="work").length;
+
+  // スタッフ名候補（五十音順）
+  const nameSuggests=useMemo(()=>[...staffList].sort((a,b)=>a.localeCompare(b,"ja")),[staffList]);
+  const filteredSuggests=ni?nameSuggests.filter(n=>n.includes(ni)):nameSuggests;
+
+  // クリック外で候補を閉じる
+  useEffect(()=>{
+    const h=e=>{if(nameWrapRef.current&&!nameWrapRef.current.contains(e.target))setShowSuggest(false);};
+    document.addEventListener("mousedown",h);return()=>document.removeEventListener("mousedown",h);
+  },[]);
+
+  if(done)return(
+    <div style={{background:"#F0F2F5",minHeight:"calc(100vh - 44px)"}}>
+      <StaffHdr ap={ap} p0={p0} pe={pe} nd={dates.length} subs={subs} apid={apid} onSm={()=>setSm(true)} shopName={shopName}/>
+      {sm&&<SmModal subs={subs} periods={periods} apid={apid} onClose={()=>setSm(false)} staffList={staffList} onEditSub={sub=>{onSub(sub);}}/>}
+      <div style={{maxWidth:560,margin:"0 auto",padding:"50px 20px",textAlign:"center"}}>
+        <div style={{fontSize:68,animation:"bI .5s"}}>✅</div>
+        <div style={{fontSize:22,fontWeight:700,color:"#05A847",marginTop:14,marginBottom:8}}>提出完了！</div>
+        <div style={{background:"#E8F9EE",border:"1px solid #C2F0D2",borderRadius:12,padding:"14px 20px",marginBottom:24,fontSize:14,lineHeight:1.9,display:"inline-block",textAlign:"left"}}>
+          <strong style={{color:"#05A847"}}>{ap?.label}</strong><br/>
+          {ap?.startDate?.replace(/-/g,"/")} 〜 {ap?.endDate?.replace(/-/g,"/")}<br/>
+          出勤予定：<strong style={{color:"#05A847"}}>{wk}日</strong>　休み：{dates.length-wk}日
+          {comment&&<><br/>コメント：{comment}</>}
+        </div>
+        <div style={{display:"flex",gap:10,justifyContent:"center",flexWrap:"wrap"}}>
+          {!dl&&<button onClick={()=>setDone(false)} style={{padding:"11px 22px",background:"white",border:"2px solid #06C755",borderRadius:10,color:"#05A847",fontSize:14,fontWeight:700,cursor:"pointer"}}>✏️ 修正する</button>}
+          <button onClick={reset} style={{padding:"11px 22px",background:"#F0F2F5",border:"2px solid #E5E7EB",borderRadius:10,color:"#6B7280",fontSize:14,fontWeight:700,cursor:"pointer"}}>🔄 最初から</button>
+        </div>
+      </div>
+    </div>
+  );
+
+  return(
+    <div style={{background:"#F0F2F5",minHeight:"calc(100vh - 44px)"}}>
+      <StaffHdr ap={ap} p0={p0} pe={pe} nd={dates.length} subs={subs} apid={apid} onSm={()=>setSm(true)} shopName={shopName}/>
+      {sm&&<SmModal subs={subs} periods={periods} apid={apid} onClose={()=>setSm(false)} staffList={staffList} onEditSub={sub=>{onSub(sub);}}/>}
+      <div style={{maxWidth:560,margin:"0 auto",padding:"14px 12px 120px"}}>
+        {ap?.deadlineDate&&<div style={{background:dl?"#FFF0F1":"#FFFBEB",border:`1px solid ${dl?"#FF4757":"#FCD34D"}`,borderRadius:10,padding:"10px 14px",marginBottom:12,fontSize:13,fontWeight:700,color:dl?"#FF4757":"#92400E"}}>{dl?`⚠️ 締切済み（${ap.deadlineDate.replace(/-/g,"/")}）`:`📅 締切日：${ap.deadlineDate.replace(/-/g,"/")}`}</div>}
+
+        {/* 名前カード */}
+        <div style={{background:"#fff",borderRadius:14,boxShadow:"0 1px 4px rgba(0,0,0,.08)",marginBottom:14,padding:"16px 18px",display:"flex",alignItems:"center",gap:14}}>
+          <div style={{width:48,height:48,borderRadius:"50%",background:"#E8F9EE",border:"2px solid #C2F0D2",display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0}}>👤</div>
+          <div style={{flex:1,minWidth:0}} ref={nameWrapRef}>
+            {editN?(
+              <div style={{position:"relative"}}>
+                <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                  <input ref={nr} value={ni} onChange={e=>{setNi(e.target.value);setShowSuggest(true);}}
+                    onKeyDown={e=>{if(e.key==="Enter"){if(ni.trim())setName(ni.trim());setEditN(false);setShowSuggest(false);}if(e.key==="Escape"){setEditN(false);setShowSuggest(false);}}}
+                    onFocus={()=>setShowSuggest(true)}
+                    placeholder="お名前を入力"
+                    style={{flex:1,padding:"10px 12px",fontSize:18,fontWeight:700,background:"#F0F2F5",border:"2px solid #06C755",borderRadius:10,outline:"none",color:"#1A1A2E",minWidth:0}}/>
+                  <button onClick={()=>{if(ni.trim())setName(ni.trim());setEditN(false);setShowSuggest(false);}} style={{padding:"10px 16px",background:"#06C755",border:"none",borderRadius:10,color:"white",fontSize:14,fontWeight:700,cursor:"pointer",flexShrink:0}}>確定</button>
+                </div>
+                {showSuggest&&filteredSuggests.length>0&&(
+                  <div className="name-suggest">
+                    {filteredSuggests.map((n,i)=>(
+                      <div key={i} className="name-suggest-item" onMouseDown={e=>{e.preventDefault();setName(n);setNi(n);setEditN(false);setShowSuggest(false);}}>
+                        {n}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ):name?(
+              <div onClick={()=>{setNi(name);setEditN(true);setTimeout(()=>nr.current?.focus(),50);}} style={{cursor:"pointer"}}>
+                <div style={{fontSize:10,fontWeight:700,color:"#6B7280",marginBottom:2,letterSpacing:".05em"}}>名前（タップで変更）</div>
+                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <span style={{fontSize:22,fontWeight:900,color:"#1A1A2E",lineHeight:1}}>{name}</span>
+                  <span style={{fontSize:12,color:"#6B7280",background:"#F0F2F5",padding:"2px 8px",borderRadius:6}}>✎ 変更</span>
+                </div>
+              </div>
+            ):(
+              <div onClick={()=>{setNi("");setEditN(true);setTimeout(()=>{nr.current?.focus();setShowSuggest(true);},50);}} style={{cursor:"pointer",padding:"4px 0"}}>
+                <div style={{fontSize:13,fontWeight:700,color:"#6B7280",marginBottom:4}}>お名前を入力してください（必須）</div>
+                <div style={{display:"flex",alignItems:"center",gap:8,padding:"10px 14px",background:"#F0F2F5",borderRadius:10,border:"2px dashed #E5E7EB"}}>
+                  <span style={{fontSize:16,color:"#9CA3AF"}}>例）山田 太郎</span>
+                  <span style={{marginLeft:"auto",fontSize:12,color:"#06C755",fontWeight:700}}>タップして入力 →</span>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* 日付カード */}
+        {dates.map(ds=>{
+          const d=pd(ds),m=d.getMonth()+1,day=d.getDate(),dow=d.getDay(),wd=WD[dow];
+          const st=sd[ds]||{status:"holiday"},iw=st.status==="work",iS=dow===6,iSu=dow===0||isHoliday(ds);
+          const cds=gc(ds);
+          return(
+            <div key={ds} className="dc" style={{background:"#fff",borderRadius:14,boxShadow:"0 1px 4px rgba(0,0,0,.08)",marginBottom:10,border:`2px solid ${iw?"#C2F0D2":"#E5E7EB"}`,opacity:iw?1:.82}}>
+              <div style={{padding:"11px 15px 9px",display:"flex",alignItems:"center",justifyContent:"space-between",background:"linear-gradient(to right,#F9FAFB,#fff)"}}>
+                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <span style={{fontSize:17,fontWeight:700,color:"#1A1A2E"}}>{m}/{day}</span>
+                  <span style={{fontSize:13,fontWeight:700,padding:"2px 8px",borderRadius:6,background:iS?"#EFF6FF":iSu?"#FFF0F1":"#F0F2F5",color:iS?"#3B82F6":iSu?"#FF4757":"#6B7280"}}>{wd}{isHoliday(ds)?"祝":""}</span>
+                </div>
+                <span style={{fontSize:12,fontWeight:700,padding:"3px 10px",borderRadius:12,background:iw?"#E8F9EE":"#F0F2F5",color:iw?"#15803D":"#6B7280"}}>{iw?"出勤":"休み"}</span>
+              </div>
+              <div style={{display:"flex",gap:8,padding:"0 15px 10px"}}>
+                {[["work","出勤"],["holiday","休み"]].map(([v,l])=>{
+                  const a=st.status===v,iW=v==="work";
+                  return(<div key={v} onClick={()=>!dl&&upd(ds,{status:v,start:iW?(st.start||cds[0]?.start||"18:00"):undefined,end:iW?(st.end||cds[0]?.end||"23:00"):undefined})}
+                    style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",gap:6,padding:"9px 0",borderRadius:10,cursor:dl?"not-allowed":"pointer",border:`2px solid ${a?(iW?"#06C755":"#FF4757"):"#E5E7EB"}`,background:a?(iW?"#E8F9EE":"#FFF0F1"):"#F0F2F5",color:a?(iW?"#166634":"#FF4757"):"#6B7280",fontSize:14,fontWeight:600,opacity:dl?.5:1,transition:"all .15s"}}>
+                    <div style={{width:15,height:15,borderRadius:"50%",border:"2px solid currentColor",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{a&&<div style={{width:7,height:7,borderRadius:"50%",background:"currentColor"}}/>}</div>{l}
+                  </div>);
+                })}
+              </div>
+              {iw&&(
+                <div style={{padding:"0 15px 13px"}}>
+                  {cds.length>0&&<div style={{marginBottom:10}}>
+                    <div style={{fontSize:11,fontWeight:700,color:"#6B7280",marginBottom:5}}>⚡ 候補から選択</div>
+                    <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
+                      {cds.map((c,i)=>{const sel=st.start===c.start&&st.end===c.end;return(
+                        <button key={i} className="cb" onClick={()=>!dl&&upd(ds,{start:c.start,end:c.end})} disabled={dl}
+                          style={{padding:"6px 11px",fontSize:13,fontWeight:700,background:sel?"#06C755":"rgba(6,199,85,.1)",color:sel?"white":"#05A847",border:`1.5px solid ${sel?"#06C755":"#C2F0D2"}`,borderRadius:8,whiteSpace:"nowrap",cursor:"pointer"}}>
+                          {c.start}〜{c.end}
+                        </button>
+                      );})}
+                    </div>
+                  </div>}
+                  <div style={{display:"flex",gap:8}}>
+                    {[["start","出勤"],["end","退勤"]].map(([f,l])=>(
+                      <div key={f} style={{flex:1}}>
+                        <div style={{fontSize:11,fontWeight:700,color:"#6B7280",marginBottom:4}}>{l}</div>
+                        <select value={st[f]||"18:00"} onChange={e=>!dl&&upd(ds,{[f]:e.target.value})} disabled={dl}
+                          style={{width:"100%",padding:"9px 28px 9px 10px",fontSize:15,fontWeight:600,background:`#F0F2F5 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='13' height='13' viewBox='0 0 24 24' fill='none' stroke='%236B7280' stroke-width='2.5'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E") no-repeat right 8px center`,border:"2px solid #E5E7EB",borderRadius:9,color:"#1A1A2E",outline:"none",cursor:"pointer",appearance:"none",WebkitAppearance:"none"}}>
+                          {TO.map(t=><option key={t} value={t}>{t}</option>)}
+                        </select>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {!iw&&<div style={{padding:"0 15px 13px",fontSize:13,color:"#6B7280",fontWeight:500}}>🌙 お休み</div>}
+            </div>
+          );
+        })}
+
+        {/* コメント欄 */}
+        <div style={{background:"#fff",borderRadius:14,boxShadow:"0 1px 4px rgba(0,0,0,.08)",marginBottom:10,overflow:"hidden"}}>
+          <div style={{padding:"12px 16px 10px",borderBottom:"1px solid #E5E7EB",display:"flex",alignItems:"center",gap:8}}>
+            <span style={{fontSize:16}}>💬</span>
+            <span style={{fontSize:14,fontWeight:700,color:"#1A1A2E"}}>コメント・備考（任意）</span>
+          </div>
+          <div style={{padding:"14px 16px"}}>
+            <textarea value={comment} onChange={e=>setComment(e.target.value)} disabled={dl}
+              placeholder="休み希望の理由、変動できる日、その他連絡事項など"
+              style={{width:"100%",minHeight:80,padding:"10px 12px",fontSize:14,color:"#1A1A2E",background:"#F0F2F5",border:"2px solid #E5E7EB",borderRadius:10,outline:"none",resize:"vertical",lineHeight:1.6,fontFamily:"inherit"}}
+              onFocus={e=>e.target.style.borderColor="#06C755"} onBlur={e=>e.target.style.borderColor="#E5E7EB"}></textarea>
+          </div>
+        </div>
+      </div>
+
+      {/* 送信ボタン */}
+      {!dl&&<div style={{position:"fixed",bottom:0,left:0,right:0,background:"rgba(240,242,245,.97)",backdropFilter:"blur(10px)",padding:"10px 14px 16px",boxShadow:"0 -4px 20px rgba(0,0,0,.08)",zIndex:40}}>
+        <div style={{maxWidth:560,margin:"0 auto",display:"flex",gap:8}}>
+          <button onClick={reset} style={{padding:"13px 14px",background:"white",border:"2px solid #E5E7EB",borderRadius:10,color:"#6B7280",fontSize:13,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>🔄 リセット</button>
+          <button onClick={()=>{if(!name.trim()){tt_("⚠️ 名前を入力してください");return;}setConf(true);}}
+            style={{flex:1,padding:13,background:"linear-gradient(135deg,#06C755,#05A847)",color:"white",border:"none",borderRadius:10,fontSize:16,fontWeight:700,boxShadow:"0 4px 16px rgba(6,199,85,.35)",cursor:"pointer"}}>
+            📤 シフトを提出する
+          </button>
+        </div>
+      </div>}
+
+      {/* 確認モーダル */}
+      {conf&&<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:20,animation:"fI .2s"}}>
+        <div style={{background:"white",borderRadius:20,width:"100%",maxWidth:340,padding:"26px 22px 20px",boxShadow:"0 8px 32px rgba(0,0,0,.14)",animation:"sI .2s"}}>
+          <div style={{fontSize:36,textAlign:"center",marginBottom:10}}>📤</div>
+          <div style={{fontSize:17,fontWeight:700,textAlign:"center",marginBottom:8}}>シフトを提出しますか？</div>
+          <div style={{background:"#F0F2F5",borderRadius:10,padding:"11px 13px",marginBottom:18,fontSize:13,lineHeight:1.9,color:"#6B7280"}}>
+            <strong style={{color:"#1A1A2E"}}>氏名</strong>：{name}<br/>
+            <strong style={{color:"#1A1A2E"}}>期間</strong>：{ap?.label}<br/>
+            <strong style={{color:"#1A1A2E"}}>出勤</strong>：{dates.filter(d=>sd[d]?.status==="work").length}日　<strong style={{color:"#1A1A2E"}}>休み</strong>：{dates.filter(d=>sd[d]?.status==="holiday").length}日
+            {comment&&<><br/><strong style={{color:"#1A1A2E"}}>コメント</strong>：{comment}</>}
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            <button onClick={()=>setConf(false)} style={{flex:1,padding:12,background:"#F0F2F5",border:"none",borderRadius:10,fontSize:14,fontWeight:600,color:"#6B7280",cursor:"pointer"}}>キャンセル</button>
+            <button onClick={submit} style={{flex:2,padding:12,background:"linear-gradient(135deg,#06C755,#05A847)",border:"none",borderRadius:10,fontSize:14,fontWeight:700,color:"white",cursor:"pointer"}}>提出する</button>
+          </div>
+        </div>
+      </div>}
+      {toast&&<div style={{position:"fixed",top:70,left:"50%",transform:"translateX(-50%)",background:"rgba(26,26,46,.9)",color:"white",padding:"10px 20px",borderRadius:24,fontSize:14,fontWeight:500,zIndex:500,whiteSpace:"nowrap",animation:"fI .3s"}}>{toast}</div>}
+    </div>
+  );
+}
+
+// ===== スタッフヘッダー =====
+function StaffHdr({ap,p0,pe,nd,subs,apid,onSm,shopName}){
+  const submitted=subs.filter(s=>s.periodId===apid);
+  return(
+    <div style={{background:"#06C755",boxShadow:"0 2px 12px rgba(6,199,85,.25)",padding:"12px 14px"}}>
+      <div style={{maxWidth:560,margin:"0 auto",display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}>
+        <div style={{display:"flex",alignItems:"center",gap:8,flex:1,minWidth:0}}>
+          <span style={{fontSize:20,flexShrink:0}}>📅</span>
+          <div style={{minWidth:0}}>
+            <div style={{display:"flex",alignItems:"center",gap:6}}>
+              {shopName&&<span style={{fontSize:11,background:"rgba(255,255,255,.25)",color:"white",padding:"1px 7px",borderRadius:10,fontWeight:700,whiteSpace:"nowrap"}}>{shopName}</span>}
+              <div style={{fontSize:15,fontWeight:700,color:"white",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{ap?.label||"シフト希望提出"}</div>
+            </div>
+            <div style={{fontSize:11,color:"rgba(255,255,255,.85)",marginTop:1}}>{p0} 〜 {pe}（{nd}日間）</div>
+          </div>
+        </div>
+        <button onClick={onSm} style={{flexShrink:0,background:"rgba(255,255,255,.18)",border:"1px solid rgba(255,255,255,.4)",borderRadius:20,padding:"7px 14px",color:"white",fontSize:13,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",gap:6,whiteSpace:"nowrap"}}>
+          👥 提出状況
+          <span style={{background:submitted.length>0?"white":"rgba(255,255,255,.3)",color:submitted.length>0?"#05A847":"white",borderRadius:20,padding:"1px 8px",fontSize:12,fontWeight:800}}>{submitted.length}</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// 提出状況モーダル（全画面・名前固定・横スクロール）
+// ============================================================
+function SmModal({subs,periods,apid,onClose,staffList,onEditSub}){
+  const period=periods.find(p=>p.id===apid);
+  const submitted=subs.filter(s=>s.periodId===apid);
+  const dates=period?gd(period.startDate,period.endDate):[];
+  const [editTarget,setEditTarget]=useState(null); // {sub, dateStr} 編集中セル
+
+  // 未提出者
+  const submittedNames=submitted.map(s=>s.staffName);
+  const notSubmitted=staffList.filter(n=>!submittedNames.includes(n));
+
+  const NW=80,CW=86,COMMENT_W=140;
+
+  const handleCellClick=(sub,ds)=>{
+    if(!sub)return;
+    setEditTarget({subId:sub.id,ds});
+  };
+  const applyCellEdit=(subId,ds,newStatus,newStart,newEnd)=>{
+    const sub=submitted.find(s=>s.id===subId);
+    if(!sub)return;
+    const newSub={...sub,shifts:{...sub.shifts,[ds]:{status:newStatus,start:newStart,end:newEnd}}};
+    onEditSub(newSub);
+    setEditTarget(null);
+  };
+
+  return(
+    <div style={{position:"fixed",inset:0,background:"#F0F2F5",zIndex:300,display:"flex",flexDirection:"column",animation:"fI .2s"}}>
+      {/* ヘッダー */}
+      <div style={{background:"#06C755",padding:"12px 16px",flexShrink:0,boxShadow:"0 2px 8px rgba(6,199,85,.3)"}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+          <div>
+            <div style={{fontSize:16,fontWeight:700,color:"white"}}>👥 提出状況一覧</div>
+            <div style={{fontSize:11,color:"rgba(255,255,255,.85)",marginTop:1}}>{period?.label}　提出済み {submitted.length}名</div>
+          </div>
+          <button onClick={onClose} style={{background:"rgba(255,255,255,.2)",border:"1px solid rgba(255,255,255,.4)",borderRadius:"50%",width:36,height:36,color:"white",fontSize:20,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
+        </div>
+      </div>
+
+      {submitted.length===0
+        ?<div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",color:"#6B7280",fontSize:15,flexDirection:"column",gap:12}}>
+            <div>まだ提出者がいません</div>
+            {notSubmitted.length>0&&<div style={{fontSize:13,color:"#9CA3AF"}}>未提出：{notSubmitted.join("、")}</div>}
+          </div>
+        :<div style={{flex:1,display:"flex",overflow:"hidden"}}>
+          {/* 名前列（固定） */}
+          <div style={{width:NW,flexShrink:0,borderRight:"1px solid #E5E7EB",display:"flex",flexDirection:"column",background:"white"}}>
+            <div style={{height:52,borderBottom:"1px solid #E5E7EB",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,color:"#6B7280",flexShrink:0}}>名前</div>
+            <div style={{overflowY:"hidden",flex:1}}>
+              {submitted.map((sub,ri)=>(
+                <div key={sub.id} onClick={()=>{}} style={{height:64,borderBottom:"1px solid #E5E7EB",display:"flex",alignItems:"center",padding:"0 8px",background:ri%2===0?"white":"#FAFAFA",cursor:"default"}}>
+                  <span style={{fontSize:12,fontWeight:700,color:"#1A1A2E",wordBreak:"break-all",lineHeight:1.3}}>{sub.staffName}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* 日付＋シフト横スクロール */}
+          <div style={{flex:1,overflow:"auto",display:"flex",flexDirection:"column"}}>
+            {/* 日付ヘッダー */}
+            <div style={{display:"flex",flexShrink:0,borderBottom:"1px solid #E5E7EB",background:"white",position:"sticky",top:0,zIndex:5}}>
+              {dates.map(ds=>{const d=pd(ds),m=d.getMonth()+1,day=d.getDate(),dow=d.getDay(),wd=WD[dow],iS=dow===6,iSu=dow===0||isHoliday(ds);return(
+                <div key={ds} style={{width:CW,flexShrink:0,padding:"4px",textAlign:"center",height:52,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",borderRight:"1px solid #E5E7EB"}}>
+                  <div style={{fontSize:13,fontWeight:700,color:"#1A1A2E"}}>{m}/{day}</div>
+                  <div style={{display:"inline-block",fontSize:11,fontWeight:700,padding:"1px 6px",borderRadius:4,background:iS?"#EFF6FF":iSu?"#FFF0F1":"#F0F2F5",color:iS?"#3B82F6":iSu?"#FF4757":"#6B7280",marginTop:2}}>{wd}{isHoliday(ds)?"祝":""}</div>
+                </div>
+              );})}
+              <div style={{width:COMMENT_W,flexShrink:0,padding:"4px",textAlign:"center",height:52,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,color:"#6B7280",borderRight:"1px solid #E5E7EB"}}>コメント</div>
+            </div>
+            {/* データ行 */}
+            {submitted.map((sub,ri)=>(
+              <div key={sub.id} style={{display:"flex",background:ri%2===0?"white":"#FAFAFA",flexShrink:0,borderBottom:"1px solid #E5E7EB"}}>
+                {dates.map(ds=>{
+                  const s=sub.shifts?.[ds],iw=s?.status==="work";
+                  const isEditing=editTarget&&editTarget.subId===sub.id&&editTarget.ds===ds;
+                  return(
+                    <div key={ds} onClick={()=>handleCellClick(sub,ds)} style={{width:CW,flexShrink:0,height:64,padding:"4px",borderRight:"1px solid #E5E7EB",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,cursor:"pointer",background:isEditing?"#E8F9EE":"transparent",transition:"background .15s"}}>
+                      {iw?(<>
+                        <div style={{fontSize:11,fontWeight:700,background:"#E8F9EE",color:"#15803D",padding:"2px 5px",borderRadius:4,border:"1px solid #C2F0D2"}}>出勤</div>
+                        <div style={{fontSize:10,fontWeight:600,color:"#1A1A2E",whiteSpace:"nowrap"}}>{s.start}</div>
+                        <div style={{fontSize:9,color:"#9CA3AF"}}>〜</div>
+                        <div style={{fontSize:10,fontWeight:600,color:"#1A1A2E",whiteSpace:"nowrap"}}>{s.end}</div>
+                      </>):(<div style={{fontSize:11,color:"#9CA3AF"}}>🌙</div>)}
+                    </div>
+                  );
+                })}
+                <div style={{width:COMMENT_W,flexShrink:0,height:64,padding:"4px 8px",borderRight:"1px solid #E5E7EB",display:"flex",alignItems:"center",overflow:"hidden"}}>
+                  <span style={{fontSize:11,color:"#6B7280",lineHeight:1.4,overflow:"hidden",display:"-webkit-box",WebkitLineClamp:3,WebkitBoxOrient:"vertical"}}>{sub.comment||""}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      }
+
+      {/* セル編集パネル */}
+      {editTarget&&(()=>{
+        const sub=submitted.find(s=>s.id===editTarget.subId);
+        const s=sub?.shifts?.[editTarget.ds]||{status:"holiday"};
+        const d=pd(editTarget.ds);
+        return(
+          <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.4)",zIndex:400,display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={()=>setEditTarget(null)}>
+            <div style={{background:"white",borderRadius:16,width:"100%",maxWidth:320,padding:"20px",animation:"sI .2s"}} onClick={e=>e.stopPropagation()}>
+              <div style={{fontSize:15,fontWeight:700,marginBottom:12}}>{sub?.staffName} / {d.getMonth()+1}/{d.getDate()}（{WD[d.getDay()]}）</div>
+              <div style={{display:"flex",gap:8,marginBottom:14}}>
+                {[["work","出勤"],["holiday","休み"]].map(([v,l])=>(
+                  <button key={v} onClick={()=>{const cur=s;applyCellEdit(editTarget.subId,editTarget.ds,v,cur.start||"18:00",cur.end||"23:00");}}
+                    style={{flex:1,padding:"10px 0",border:`2px solid ${s.status===v?(v==="work"?"#06C755":"#FF4757"):"#E5E7EB"}`,borderRadius:10,background:s.status===v?(v==="work"?"#E8F9EE":"#FFF0F1"):"#F0F2F5",color:s.status===v?(v==="work"?"#166634":"#FF4757"):"#6B7280",fontWeight:700,fontSize:14,cursor:"pointer"}}>{l}</button>
+                ))}
+              </div>
+              {s.status==="work"&&<div style={{display:"flex",gap:8}}>
+                {[["start","出勤"],["end","退勤"]].map(([f,l])=>(
+                  <div key={f} style={{flex:1}}>
+                    <div style={{fontSize:11,fontWeight:700,color:"#6B7280",marginBottom:4}}>{l}</div>
+                    <select defaultValue={s[f]||"18:00"} onChange={e=>{const other=f==="start"?s.end:s.start;const ns=f==="start"?e.target.value:other;const ne=f==="end"?e.target.value:other;applyCellEdit(editTarget.subId,editTarget.ds,s.status,f==="start"?e.target.value:(s.start||"18:00"),f==="end"?e.target.value:(s.end||"23:00"));}}
+                      style={{width:"100%",padding:"9px 10px",fontSize:14,fontWeight:600,background:"#F0F2F5",border:"2px solid #E5E7EB",borderRadius:9,color:"#1A1A2E",outline:"none",cursor:"pointer"}}>
+                      {TO.map(t=><option key={t} value={t}>{t}</option>)}
+                    </select>
+                  </div>
+                ))}
+              </div>}
+              <button onClick={()=>setEditTarget(null)} style={{width:"100%",marginTop:14,padding:"10px",background:"#F0F2F5",border:"none",borderRadius:10,color:"#6B7280",fontSize:14,fontWeight:600,cursor:"pointer"}}>閉じる</button>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* 未提出者 */}
+      {notSubmitted.length>0&&<div style={{background:"white",borderTop:"1px solid #E5E7EB",padding:"10px 16px",flexShrink:0}}>
+        <div style={{fontSize:12,fontWeight:700,color:"#9CA3AF",marginBottom:6}}>📋 未提出（{notSubmitted.length}名）</div>
+        <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+          {notSubmitted.map((n,i)=><span key={i} style={{fontSize:12,background:"#FFF0F1",color:"#FF4757",border:"1px solid rgba(255,71,87,.2)",padding:"3px 10px",borderRadius:20,fontWeight:600}}>{n}</span>)}
+        </div>
+      </div>}
+    </div>
+  );
+}
+
+// ============================================================
+// 管理者ログイン
+// ============================================================
+function AdminLogin({settings,onAuth}){
+  const[pw,setPw]=useState(""),[err,setErr]=useState("");
+  const go=()=>{if(pw===(settings.password||DEFAULT_PW))onAuth();else{setErr("パスワードが違います");setPw("");}};
+  return(
+    <div style={{display:"flex",alignItems:"center",justifyContent:"center",minHeight:"calc(100vh - 44px)",background:"#1A1A2E",padding:20}}>
+      <div style={{background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",borderRadius:20,padding:"36px 28px",width:"100%",maxWidth:360,textAlign:"center",animation:"sI .3s"}}>
+        <div style={{fontSize:48,marginBottom:12}}>🔐</div>
+        <div style={{fontSize:20,fontWeight:700,color:"white",marginBottom:4}}>管理者ログイン</div>
+        <div style={{fontSize:13,color:"rgba(255,255,255,.4)",marginBottom:24}}>パスワードを入力してください</div>
+        <input type="password" value={pw} onChange={e=>setPw(e.target.value)} onKeyDown={e=>e.key==="Enter"&&go()} placeholder="••••••••" style={{width:"100%",padding:"13px 16px",background:"rgba(255,255,255,.08)",border:"1px solid rgba(255,255,255,.15)",borderRadius:10,color:"white",fontSize:16,outline:"none",textAlign:"center",letterSpacing:".2em",marginBottom:12}}/>
+        <button onClick={go} style={{width:"100%",padding:14,background:"#06C755",border:"none",borderRadius:10,color:"white",fontSize:16,fontWeight:700,cursor:"pointer"}}>ログイン</button>
+        <div style={{fontSize:13,color:"#FF8C94",marginTop:10,minHeight:20}}>{err}</div>
+        <div style={{fontSize:12,color:"rgba(255,255,255,.25)",marginTop:6}}>初期PW: admin1234</div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// 管理者画面
+// ============================================================
+function AdminView({settings,periods,subs,staffList,shops,currentShopId,saveSettings,savePeriods,saveSubs,saveStaff,saveShops,setCurrentShopId,logout}){
+  const[tab,setTab]=useState("periods");
+  const[toast,setToast]=useState(null);
+  const[shopMenuOpen,setShopMenuOpen]=useState(false);
+  const[shopEditMode,setShopEditMode]=useState(false);
+  const tr=useRef();
+  const tt=m=>{setToast(m);clearTimeout(tr.current);tr.current=setTimeout(()=>setToast(null),2500);};
+  const currentShop=shops.find(s=>s.id===currentShopId)||shops[0];
+
+  return(
+    <div style={{background:"#1A1A2E",minHeight:"calc(100vh - 44px)"}}>
+      {/* 管理ヘッダー */}
+      <div style={{background:"#16213E",borderBottom:"1px solid rgba(255,255,255,.08)",padding:"12px 16px"}}>
+        <div style={{maxWidth:900,margin:"0 auto",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <div style={{width:34,height:34,background:"#06C755",borderRadius:9,display:"flex",alignItems:"center",justifyContent:"center",fontSize:17}}>⚙️</div>
+            <div>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <div style={{fontSize:15,fontWeight:700,color:"white"}}>シフト管理システム</div>
+                {/* 店舗切り替えボタン */}
+                <div style={{position:"relative"}}>
+                  <button onClick={()=>setShopMenuOpen(v=>!v)} style={{display:"flex",alignItems:"center",gap:5,background:"rgba(255,255,255,.1)",border:"1px solid rgba(255,255,255,.2)",borderRadius:8,padding:"4px 10px",color:"white",fontSize:12,fontWeight:600,cursor:"pointer"}}>
+                    🏪 {currentShop?.name||"店舗"} ▼
+                  </button>
+                  {shopMenuOpen&&(
+                    <div style={{position:"absolute",top:"calc(100% + 6px)",left:0,background:"white",borderRadius:12,boxShadow:"0 8px 24px rgba(0,0,0,.2)",zIndex:200,minWidth:180,overflow:"hidden"}}>
+                      {shops.map(sh=>(
+                        <div key={sh.id} onClick={()=>{setCurrentShopId(sh.id);setShopMenuOpen(false);}} style={{padding:"11px 16px",cursor:"pointer",fontSize:14,fontWeight:sh.id===currentShopId?700:400,color:sh.id===currentShopId?"#06C755":"#1A1A2E",background:sh.id===currentShopId?"#E8F9EE":"white",display:"flex",alignItems:"center",gap:8}}>
+                          {sh.id===currentShopId&&<span style={{fontSize:10}}>✓</span>}{sh.name}
+                        </div>
+                      ))}
+                      <div style={{borderTop:"1px solid #E5E7EB",padding:"8px 10px",display:"flex",gap:6}}>
+                        <button onClick={()=>{setShopEditMode(v=>!v);}} style={{flex:1,padding:"7px",background:"#F0F2F5",border:"none",borderRadius:8,fontSize:12,fontWeight:600,color:"#1A1A2E",cursor:"pointer"}}>⚙️ 店舗編集</button>
+                        <button onClick={()=>{const name=prompt("新しい店舗名を入力");if(!name)return;const ns=makeShop(name.trim());saveShops([...shops,ns]);setCurrentShopId(ns.id);setShopMenuOpen(false);tt("✅ 店舗を追加しました");}} style={{flex:1,padding:"7px",background:"#06C755",border:"none",borderRadius:8,fontSize:12,fontWeight:700,color:"white",cursor:"pointer"}}>＋ 追加</button>
+                      </div>
+                      {shopEditMode&&<div style={{borderTop:"1px solid #E5E7EB",padding:"10px"}}>
+                        {shops.map(sh=>(
+                          <div key={sh.id} style={{display:"flex",alignItems:"center",gap:6,marginBottom:6}}>
+                            <span style={{flex:1,fontSize:13,color:"#1A1A2E"}}>{sh.name}</span>
+                            <button onClick={()=>{const name=prompt("店舗名を変更",sh.name);if(!name)return;saveShops(shops.map(s=>s.id===sh.id?{...s,name:name.trim()}:s));tt("✅ 変更しました");}} style={{padding:"4px 8px",background:"#F0F2F5",border:"none",borderRadius:6,fontSize:11,cursor:"pointer"}}>✏️</button>
+                            {shops.length>1&&<button onClick={()=>{if(!confirm(`「${sh.name}」を削除しますか？`))return;const ns=shops.filter(s=>s.id!==sh.id);saveShops(ns);if(sh.id===currentShopId)setCurrentShopId(ns[0].id);tt("🗑️ 削除しました");}} style={{padding:"4px 8px",background:"rgba(255,71,87,.1)",border:"none",borderRadius:6,fontSize:11,color:"#FF4757",cursor:"pointer"}}>🗑️</button>}
+                          </div>
+                        ))}
+                      </div>}
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div style={{fontSize:11,color:"rgba(255,255,255,.4)"}}>管理者画面</div>
+            </div>
+          </div>
+          <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+            {[["periods","📅 期間"],["staff","👥 スタッフ"],["candidates","📋 候補"],["submissions","📥 提出一覧"],["settings","⚙️ 設定"]].map(([id,l])=>(
+              <button key={id} onClick={()=>setTab(id)} style={{padding:"7px 13px",background:tab===id?"#06C755":"rgba(255,255,255,.06)",border:`1px solid ${tab===id?"#06C755":"rgba(255,255,255,.1)"}`,borderRadius:7,color:"white",fontSize:12,fontWeight:600,cursor:"pointer",opacity:tab===id?1:.75}}>{l}</button>
+            ))}
+            <button onClick={logout} style={{padding:"7px 12px",background:"rgba(255,71,87,.15)",border:"1px solid rgba(255,71,87,.3)",borderRadius:7,color:"#FF8C94",fontSize:12,cursor:"pointer"}}>ログアウト</button>
+          </div>
+        </div>
+      </div>
+      <div style={{maxWidth:900,margin:"0 auto",padding:"20px 14px 60px"}}>
+        {tab==="periods"&&<PeriodsTab periods={periods} subs={subs} staffList={staffList} onSave={savePeriods} tt={tt} shopId={currentShopId}/>}
+        {tab==="staff"&&<StaffTab staffList={staffList} onSave={saveStaff} tt={tt}/>}
+        {tab==="candidates"&&<CandTab settings={settings} onSave={saveSettings} tt={tt}/>}
+        {tab==="submissions"&&<SubsTab subs={subs} periods={periods} staffList={staffList} onSave={saveSubs} tt={tt}/>}
+        {tab==="settings"&&<SetTab settings={settings} onSave={saveSettings} tt={tt}/>}
+      </div>
+      {toast&&<div style={{position:"fixed",bottom:24,left:"50%",transform:"translateX(-50%)",background:"rgba(255,255,255,.12)",backdropFilter:"blur(10px)",color:"white",padding:"10px 20px",borderRadius:24,fontSize:14,fontWeight:500,zIndex:999,border:"1px solid rgba(255,255,255,.15)"}}>{toast}</div>}
+    </div>
+  );
+}
+
+// ===== 期間管理タブ =====
+function PeriodsTab({periods,subs,staffList,onSave,tt,shopId}){
+  const[eid,setEid]=useState(null);
+  const[form,setForm]=useState({label:"",startDate:"",endDate:"",deadlineDate:""});
+  const[show,setShow]=useState(false);
+  const[viewPeriodId,setViewPeriodId]=useState(null);
+  const yr=td.getFullYear(),mo=td.getMonth()+1,ms=String(mo).padStart(2,"0");
+  const nm=new Date(td.getFullYear(),td.getMonth()+1,1),nyr=nm.getFullYear(),nms=String(nm.getMonth()+1).padStart(2,"0");
+  const lc=fd(new Date(yr,mo,0)),ln=fd(new Date(nyr,nm.getMonth()+1,0));
+  const pre=[
+    {label:`${yr}年${mo}月前半`,startDate:`${yr}-${ms}-01`,endDate:`${yr}-${ms}-15`},
+    {label:`${yr}年${mo}月後半`,startDate:`${yr}-${ms}-16`,endDate:lc},
+    {label:`${nyr}年${nm.getMonth()+1}月前半`,startDate:`${nyr}-${nms}-01`,endDate:`${nyr}-${nms}-15`},
+    {label:`${nyr}年${nm.getMonth()+1}月後半`,startDate:`${nyr}-${nms}-16`,endDate:ln},
+  ];
+  const create=()=>{
+    if(!form.startDate||!form.endDate){tt("⚠️ 開始日・終了日を入力");return;}
+    const p={id:`p_${Date.now()}`,shopId,label:form.label||`${form.startDate.replace(/-/g,"/")}〜${form.endDate.replace(/-/g,"/")}`,startDate:form.startDate,endDate:form.endDate,deadlineDate:form.deadlineDate,createdAt:new Date().toISOString()};
+    onSave([...periods,p]);setForm({label:"",startDate:"",endDate:"",deadlineDate:""});setShow(false);tt("✅ 期間を作成しました");
+  };
+
+  // 提出状況ビュー
+  if(viewPeriodId){
+    const vp=periods.find(p=>p.id===viewPeriodId);
+    if(!vp)return null;
+    return(
+      <div>
+        <button onClick={()=>setViewPeriodId(null)} style={{marginBottom:16,padding:"8px 16px",background:"rgba(255,255,255,.08)",border:"1px solid rgba(255,255,255,.15)",borderRadius:8,color:"white",fontSize:13,cursor:"pointer"}}>← 期間一覧に戻る</button>
+        <SmModal subs={subs} periods={periods} apid={viewPeriodId} onClose={()=>setViewPeriodId(null)} staffList={staffList} onEditSub={sub=>{const a=[...subs];const i=a.findIndex(s=>s.id===sub.id);if(i>=0)a[i]=sub;tt("✅ 更新しました");}}/>
+      </div>
+    );
+  }
+
+  return(
+    <div>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
+        <AT>📅 期間管理</AT>
+        <button onClick={()=>setShow(v=>!v)} style={{padding:"9px 16px",background:"#06C755",border:"none",borderRadius:9,color:"white",fontSize:13,fontWeight:700,cursor:"pointer"}}>＋ 新しい期間を作成</button>
+      </div>
+      {show&&<AC title="📝 新しい期間を作成">
+        <AL>プリセット</AL>
+        <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:14}}>
+          {pre.map((p,i)=><button key={i} onClick={()=>setForm(f=>({...f,label:p.label,startDate:p.startDate,endDate:p.endDate}))} style={{padding:"6px 12px",background:"rgba(255,255,255,.07)",border:"1px solid rgba(255,255,255,.15)",borderRadius:7,color:"rgba(255,255,255,.85)",fontSize:12,fontWeight:600,cursor:"pointer"}}>{p.label}</button>)}
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:10,marginBottom:12}}>
+          <div><AL>ラベル</AL><input value={form.label} onChange={e=>setForm(f=>({...f,label:e.target.value}))} placeholder="例）7月前半" style={AI}/></div>
+          <div><AL>開始日 *</AL><input type="date" value={form.startDate} onChange={e=>setForm(f=>({...f,startDate:e.target.value}))} style={AI}/></div>
+          <div><AL>終了日 *</AL><input type="date" value={form.endDate} onChange={e=>setForm(f=>({...f,endDate:e.target.value}))} style={AI}/></div>
+          <div><AL>締切日</AL><input type="date" value={form.deadlineDate} onChange={e=>setForm(f=>({...f,deadlineDate:e.target.value}))} style={AI}/></div>
+        </div>
+        {form.startDate&&form.endDate&&form.startDate<=form.endDate&&<div style={{fontSize:12,color:"rgba(255,255,255,.35)",marginBottom:10}}>期間：{gd(form.startDate,form.endDate).length}日間</div>}
+        <div style={{display:"flex",gap:8}}>
+          <button onClick={create} style={AB}>✅ 作成する</button>
+          <button onClick={()=>setShow(false)} style={AGray}>キャンセル</button>
+        </div>
+      </AC>}
+
+      {[...periods].reverse().map(p=>{
+        const dates=gd(p.startDate,p.endDate),ip=idp(p.deadlineDate);
+        const pUrl=`${window.location.origin}${window.location.pathname}#p=${p.id}`;
+        return(
+          <div key={p.id} style={{background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.08)",borderRadius:14,padding:18,marginBottom:12,cursor:"pointer"}} onClick={e=>{if(e.target.tagName==="BUTTON"||e.target.closest("button"))return;setViewPeriodId(p.id);}}>
+            {eid===p.id
+              ?<PEF period={p} onSave={u=>{onSave(periods.map(pp=>pp.id===p.id?{...pp,...u}:pp));tt("✅ 保存しました");setEid(null);}} onCancel={()=>setEid(null)}/>
+              :<>
+                <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:12}}>
+                  <div>
+                    <div style={{fontSize:15,fontWeight:700,color:"white",marginBottom:3}}>{p.label}</div>
+                    <div style={{fontSize:13,color:"rgba(255,255,255,.6)"}}>{p.startDate?.replace(/-/g,"/")} 〜 {p.endDate?.replace(/-/g,"/")}（{dates.length}日間）</div>
+                    {p.deadlineDate&&<div style={{fontSize:12,marginTop:3,color:ip?"#FF8C94":"rgba(255,255,255,.4)"}}>締切：{p.deadlineDate.replace(/-/g,"/")} {ip?"（済み）":""}</div>}
+                    <div style={{fontSize:11,color:"rgba(255,255,255,.3)",marginTop:4}}>提出：{subs.filter(s=>s.periodId===p.id).length}件</div>
+                  </div>
+                  <div style={{display:"flex",gap:5,flexShrink:0,flexWrap:"wrap",justifyContent:"flex-end"}}>
+                    <button onClick={e=>{e.stopPropagation();setEid(p.id);}} style={{padding:"5px 9px",background:"rgba(255,255,255,.08)",border:"1px solid rgba(255,255,255,.15)",borderRadius:6,color:"rgba(255,255,255,.8)",fontSize:11,cursor:"pointer"}}>✏️ 編集</button>
+                    <button onClick={e=>{e.stopPropagation();expXl(p,subs,staffList,tt);}} style={{padding:"5px 9px",background:"linear-gradient(135deg,#217346,#1A5C38)",border:"none",borderRadius:6,color:"white",fontSize:11,fontWeight:700,cursor:"pointer"}}>📊 Excel</button>
+                    <button onClick={e=>{e.stopPropagation();if(!confirm("削除しますか？"))return;onSave(periods.filter(pp=>pp.id!==p.id));tt("🗑️ 削除しました");}} style={AD}>削除</button>
+                  </div>
+                </div>
+                {/* URLシェア */}
+                <div style={{marginTop:10,padding:"8px 12px",background:"rgba(255,255,255,.04)",borderRadius:8,display:"flex",alignItems:"center",gap:8}}>
+                  <span style={{fontSize:11,color:"rgba(255,255,255,.4)",flexShrink:0}}>🔗 URL</span>
+                  <span style={{fontSize:11,color:"rgba(255,255,255,.5)",flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{pUrl}</span>
+                  <button onClick={e=>{e.stopPropagation();navigator.clipboard.writeText(pUrl).then(()=>tt("✅ URLをコピーしました")).catch(()=>tt("URLをコピーできませんでした"));}} style={{padding:"4px 10px",background:"rgba(255,255,255,.1)",border:"none",borderRadius:6,color:"white",fontSize:11,cursor:"pointer",flexShrink:0}}>コピー</button>
+                </div>
+              </>
+            }
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+function PEF({period,onSave,onCancel}){
+  const[f,setF]=useState({label:period.label,startDate:period.startDate,endDate:period.endDate,deadlineDate:period.deadlineDate||""});
+  return(<div onClick={e=>e.stopPropagation()}>
+    <div style={{fontSize:13,fontWeight:700,color:"rgba(255,255,255,.7)",marginBottom:10}}>✏️ 編集中</div>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:9,marginBottom:12}}>
+      <div><AL>ラベル</AL><input value={f.label} onChange={e=>setF(p=>({...p,label:e.target.value}))} style={AI}/></div>
+      <div><AL>開始日</AL><input type="date" value={f.startDate} onChange={e=>setF(p=>({...p,startDate:e.target.value}))} style={AI}/></div>
+      <div><AL>終了日</AL><input type="date" value={f.endDate} onChange={e=>setF(p=>({...p,endDate:e.target.value}))} style={AI}/></div>
+      <div><AL>締切日</AL><input type="date" value={f.deadlineDate} onChange={e=>setF(p=>({...p,deadlineDate:e.target.value}))} style={AI}/></div>
+    </div>
+    <div style={{display:"flex",gap:8}}><button onClick={()=>onSave(f)} style={AB}>💾 保存</button><button onClick={onCancel} style={AGray}>キャンセル</button></div>
+  </div>);
+}
+
+// ===== Excel出力 =====
+function expXl(p,subs,staffList,tt){
+  const ss=subs.filter(s=>s.periodId===p.id);
+  if(typeof XLSX==="undefined"){tt("⚠️ SheetJS未読込み");return;}
+  const dates=gd(p.startDate,p.endDate);
+
+  // スタッフ登録順 → 未登録者はアルファベット順で後ろに
+  const submittedNames=ss.map(s=>s.staffName);
+  const registeredOrder=staffList.filter(n=>submittedNames.includes(n));
+  const unregistered=submittedNames.filter(n=>!registeredOrder.includes(n)).sort((a,b)=>a.localeCompare(b,"ja"));
+  const sl=[...registeredOrder,...unregistered];
+
+  if(sl.length===0){tt("⚠️ 提出データがありません");return;}
+
+  // ヘッダー行：日付、曜日、スタッフ名（1行）
+  const header=["日付","曜日",...sl];
+  const rows=[header];
+
+  dates.forEach(ds=>{
+    const d=pd(ds),disp=`${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,"0")}/${String(d.getDate()).padStart(2,"0")}`,wd=WD[d.getDay()];
+    const row=[disp,wd];
+    sl.forEach(nm=>{
+      const sub=ss.find(s=>s.staffName===nm),sh=sub?.shifts?.[ds];
+      if(!sh||sh.status==="holiday"){row.push("");}
+      else{
+        // 出勤時間を数値で
+        const sv=timeToNum(sh.start),ev=timeToNum(sh.end);
+        row.push(sv===""?"":sv);
+        // 退勤は別セル（後で）
+      }
+    });
+    rows.push(row);
+  });
+
+  // 実際にはスタッフごとに出勤・退勤2行
+  // → フォーマット：日付、曜日、名前1（出勤）、名前1（退勤）、名前2（出勤）...
+  const header2=["日付","曜日"];
+  sl.forEach(n=>{header2.push(n+"（出勤）");header2.push(n+"（退勤）");});
+
+  const dataRows=[header2];
+  dates.forEach(ds=>{
+    const d=pd(ds),disp=`${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,"0")}/${String(d.getDate()).padStart(2,"0")}`,wd=WD[d.getDay()];
+    const row=[disp,wd];
+    sl.forEach(nm=>{
+      const sub=ss.find(s=>s.staffName===nm),sh=sub?.shifts?.[ds];
+      if(!sh||sh.status==="holiday"){row.push("");row.push("");}
+      else{row.push(timeToNum(sh.start));row.push(timeToNum(sh.end));}
+    });
+    dataRows.push(row);
+  });
+
+  const ws=XLSX.utils.aoa_to_sheet(dataRows);
+  const nc=2+sl.length*2;
+
+  // セルスタイル（土=薄青 日祝=薄赤 休み=斜線）
+  if(!ws["!cols"])ws["!cols"]=[];
+  ws["!cols"]=[{wch:12},{wch:4},...sl.flatMap(()=>[{wch:10},{wch:10}])];
+
+  // 各セルにスタイル
+  dates.forEach((ds,ri)=>{
+    const d=pd(ds),dow=d.getDay(),isSat=dow===6,isSunHol=dow===0||isHoliday(ds);
+    const rowIdx=ri+1; // 0-indexed, row 0 = header
+    for(let ci=0;ci<nc;ci++){
+      const cellRef=XLSX.utils.encode_cell({r:rowIdx,c:ci});
+      if(!ws[cellRef])ws[cellRef]={v:"",t:"s"};
+      if(!ws[cellRef].s)ws[cellRef].s={};
+      if(isSat){ws[cellRef].s.fill={patternType:"solid",fgColor:{rgb:"DDEEFF"}};}
+      else if(isSunHol){ws[cellRef].s.fill={patternType:"solid",fgColor:{rgb:"FFEEEE"}};}
+    }
+    // 休みセルに斜線（対角線ボーダーで代替）
+    sl.forEach((nm,si)=>{
+      const sub=ss.find(s=>s.staffName===nm),sh=sub?.shifts?.[ds];
+      if(!sh||sh.status==="holiday"){
+        const c1=2+si*2,c2=2+si*2+1;
+        [c1,c2].forEach(ci=>{
+          const ref=XLSX.utils.encode_cell({r:rowIdx,c:ci});
+          if(!ws[ref])ws[ref]={v:"",t:"s"};
+          if(!ws[ref].s)ws[ref].s={};
+          // 斜線はSheetJSのfill diagonalで
+          ws[ref].s.fill={patternType:"solid",fgColor:{rgb:"E0E0E0"}};
+          ws[ref].s.border={diagonal:{style:"thin",color:{rgb:"999999"}},diagonalUp:true,diagonalDown:true};
+        });
+      }
+    });
+  });
+
+  const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,"シフト一覧");
+  const lb=p.label.slice(0,20).replace(/ /g,"_"),t=new Date();
+  XLSX.writeFile(wb,`shift_${lb}_${t.getFullYear()}${String(t.getMonth()+1).padStart(2,"0")}${String(t.getDate()).padStart(2,"0")}.xlsx`);
+  tt("✅ Excelをダウンロードしました");
+}
+
+// ===== スタッフ登録タブ =====
+function StaffTab({staffList,onSave,tt}){
+  const[newName,setNewName]=useState("");
+  const add=()=>{if(!newName.trim()){tt("⚠️ 名前を入力");return;}if(staffList.includes(newName.trim())){tt("⚠️ 既に登録されています");return;}onSave([...staffList,newName.trim()]);setNewName("");tt(`✅ ${newName.trim()} を追加しました`);};
+  const del=i=>{const a=[...staffList];a.splice(i,1);onSave(a);tt("🗑️ 削除しました");};
+  const moveUp=i=>{if(i===0)return;const a=[...staffList];[a[i-1],a[i]]=[a[i],a[i-1]];onSave(a);};
+  const moveDown=i=>{if(i===staffList.length-1)return;const a=[...staffList];[a[i],a[i+1]]=[a[i+1],a[i]];onSave(a);};
+  return(
+    <div>
+      <AT>👥 スタッフ登録</AT>
+      <AC title="スタッフ一覧">
+        {staffList.length===0&&<div style={{fontSize:13,color:"rgba(255,255,255,.35)",marginBottom:12}}>スタッフが登録されていません</div>}
+        {staffList.map((n,i)=>(
+          <div key={i} style={{display:"flex",alignItems:"center",gap:8,padding:"10px 12px",background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.08)",borderRadius:10,marginBottom:6}}>
+            <span style={{fontSize:13,color:"rgba(255,255,255,.4)",minWidth:24,textAlign:"center"}}>{i+1}</span>
+            <span style={{flex:1,fontSize:14,color:"white",fontWeight:600}}>{n}</span>
+            <button onClick={()=>moveUp(i)} disabled={i===0} style={{padding:"4px 8px",background:"rgba(255,255,255,.08)",border:"none",borderRadius:5,color:"rgba(255,255,255,.6)",fontSize:12,cursor:i===0?"not-allowed":"pointer",opacity:i===0?.3:1}}>↑</button>
+            <button onClick={()=>moveDown(i)} disabled={i===staffList.length-1} style={{padding:"4px 8px",background:"rgba(255,255,255,.08)",border:"none",borderRadius:5,color:"rgba(255,255,255,.6)",fontSize:12,cursor:i===staffList.length-1?"not-allowed":"pointer",opacity:i===staffList.length-1?.3:1}}>↓</button>
+            <button onClick={()=>del(i)} style={AD}>削除</button>
+          </div>
+        ))}
+        <div style={{display:"flex",gap:8,marginTop:12}}>
+          <input value={newName} onChange={e=>setNewName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()} placeholder="スタッフ名を入力" style={AI}/>
+          <button onClick={add} style={AB}>＋ 追加</button>
+        </div>
+      </AC>
+    </div>
+  );
+}
+
+// ===== 候補管理タブ（複数選択対応）=====
+function CandTab({settings,onSave,tt}){
+  const[mode,setMode]=useState("global");
+  const[sdow,setSdow]=useState(1);
+  const[sdate,setSdate]=useState(tds);
+  // 複数選択用
+  const[selStarts,setSelStarts]=useState([]);
+  const[selEnds,setSelEnds]=useState([]);
+  const[wSelStarts,setWSelStarts]=useState([]);
+  const[wSelEnds,setWSelEnds]=useState([]);
+  const[dSelStarts,setDSelStarts]=useState([]);
+  const[dSelEnds,setDSelEnds]=useState([]);
+  const[tmplName,setTmplName]=useState("");
+
+  const toggleArr=(arr,setArr,val)=>setArr(prev=>prev.includes(val)?prev.filter(v=>v!==val):[...prev,val]);
+
+  const addG=()=>{
+    if(selStarts.length===0||selEnds.length===0){tt("⚠️ 開始・終了を選択してください");return;}
+    const newC=[];
+    selStarts.forEach(s=>selEnds.forEach(e=>{if(s<e||(Number(s.replace(":","")))<=Number(e.replace(":","")))newC.push({start:s,end:e});}));
+    const merged=sc([...(settings.candidates||[]),...newC.filter(nc=>!(settings.candidates||[]).some(c=>c.start===nc.start&&c.end===nc.end))]);
+    onSave({...settings,candidates:merged});setSelStarts([]);setSelEnds([]);tt(`✅ ${newC.length}件追加`);
+  };
+  const delG=i=>{const c=[...(settings.candidates||[])];c.splice(i,1);onSave({...settings,candidates:c});};
+
+  const addW=()=>{
+    if(wSelStarts.length===0||wSelEnds.length===0){tt("⚠️ 開始・終了を選択してください");return;}
+    const w={...(settings.weekdayCandidates||{})};const b=w[sdow]||[];
+    const newC=[];wSelStarts.forEach(s=>wSelEnds.forEach(e=>newC.push({start:s,end:e})));
+    w[sdow]=sc([...b,...newC.filter(nc=>!b.some(c=>c.start===nc.start&&c.end===nc.end))]);
+    onSave({...settings,weekdayCandidates:w});setWSelStarts([]);setWSelEnds([]);tt(`✅ ${newC.length}件追加`);
+  };
+  const delW=(d,i)=>{const w={...(settings.weekdayCandidates||{})};w[d]=[...(w[d]||[])];w[d].splice(i,1);onSave({...settings,weekdayCandidates:w});};
+
+  const addD=()=>{
+    if(dSelStarts.length===0||dSelEnds.length===0){tt("⚠️ 開始・終了を選択してください");return;}
+    const dc={...(settings.dateCandidates||{})};
+    const newC=[];dSelStarts.forEach(s=>dSelEnds.forEach(e=>newC.push({start:s,end:e})));
+    dc[sdate]=sc([...(dc[sdate]||[]),...newC.filter(nc=>!(dc[sdate]||[]).some(c=>c.start===nc.start&&c.end===nc.end))]);
+    onSave({...settings,dateCandidates:dc});setDSelStarts([]);setDSelEnds([]);tt(`✅ ${newC.length}件追加`);
+  };
+  const delD=(dt,i)=>{const dc={...(settings.dateCandidates||{})};dc[dt]=[...(dc[dt]||[])];dc[dt].splice(i,1);if(dc[dt].length===0)delete dc[dt];onSave({...settings,dateCandidates:dc});};
+
+  // テンプレート保存
+  const saveTemplate=()=>{
+    if(!tmplName.trim()){tt("⚠️ テンプレート名を入力");return;}
+    const wdCopy={...(settings.weekdayCandidates||{})};
+    const tmpl={name:tmplName.trim(),weekdayCandidates:wdCopy,savedAt:new Date().toISOString()};
+    const ts=[...(settings.templates||[]),tmpl];
+    onSave({...settings,templates:ts});setTmplName("");tt(`✅ テンプレート「${tmplName.trim()}」を保存しました`);
+  };
+  const applyTemplate=t=>{
+    if(!confirm(`テンプレート「${t.name}」を適用しますか？現在の曜日別候補が上書きされます。`))return;
+    onSave({...settings,weekdayCandidates:t.weekdayCandidates});tt(`✅ テンプレート「${t.name}」を適用しました`);
+  };
+  const delTemplate=i=>{const ts=[...(settings.templates||[])];ts.splice(i,1);onSave({...settings,templates:ts});tt("🗑️ 削除しました");};
+
+  const wC=(settings.weekdayCandidates||{})[sdow]||[];
+  const dC=(settings.dateCandidates||{})[sdate]||[];
+
+  const MultiTimeSelect=({selected,onChange,label})=>(
+    <div>
+      <div style={{fontSize:11,color:"rgba(255,255,255,.5)",marginBottom:4}}>{label}（複数選択可）</div>
+      <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+        {TO.filter((_,i)=>i%2===0||TO[i]==="24:00").map(t=>(
+          <button key={t} onClick={()=>onChange(t)} style={{padding:"4px 8px",fontSize:12,fontWeight:600,background:selected.includes(t)?"#06C755":"rgba(255,255,255,.08)",color:selected.includes(t)?"white":"rgba(255,255,255,.7)",border:`1px solid ${selected.includes(t)?"#06C755":"rgba(255,255,255,.15)"}`,borderRadius:6,cursor:"pointer"}}>{t}</button>
+        ))}
+      </div>
+    </div>
+  );
+
+  return(
+    <div>
+      <AT>📋 候補管理</AT>
+      <div style={{display:"flex",gap:6,marginBottom:16,flexWrap:"wrap"}}>
+        {[["global","🌐 全体"],["weekday","📆 曜日別"],["date","📌 日付別"],["template","📁 テンプレ"]].map(([id,l])=>(
+          <button key={id} onClick={()=>setMode(id)} style={{padding:"8px 14px",background:mode===id?"#06C755":"rgba(255,255,255,.06)",border:`1px solid ${mode===id?"#06C755":"rgba(255,255,255,.1)"}`,borderRadius:8,color:"white",fontSize:13,fontWeight:600,cursor:"pointer"}}>{l}</button>
+        ))}
+      </div>
+
+      {mode==="global"&&<AC title="🌐 全体候補（優先度低）">
+        <CL items={settings.candidates||[]} onDel={delG}/>
+        <div style={{marginTop:12,display:"flex",flexDirection:"column",gap:10}}>
+          <MultiTimeSelect selected={selStarts} onChange={v=>toggleArr(selStarts,setSelStarts,v)} label="開始時刻"/>
+          <MultiTimeSelect selected={selEnds} onChange={v=>toggleArr(selEnds,setSelEnds,v)} label="終了時刻"/>
+          <button onClick={addG} style={{...AB,alignSelf:"flex-start"}}>＋ 選択した組み合わせを追加</button>
+        </div>
+      </AC>}
+
+      {mode==="weekday"&&<AC title="📆 曜日別候補（全体より優先）">
+        <div style={{display:"flex",gap:4,flexWrap:"wrap",marginBottom:14}}>
+          {[0,1,2,3,4,5,6].map(d=><button key={d} onClick={()=>setSdow(d)} style={{padding:"7px 14px",borderRadius:20,fontSize:13,fontWeight:700,border:"1px solid",cursor:"pointer",background:sdow===d?(d===6?"#3B82F6":d===0?"#FF4757":"#06C755"):"rgba(255,255,255,.05)",borderColor:sdow===d?"transparent":(d===6?"rgba(147,197,253,.3)":d===0?"rgba(252,165,165,.3)":"rgba(255,255,255,.15)"),color:sdow===d?"white":(d===6?"#93C5FD":d===0?"#FCA5A5":"rgba(255,255,255,.6)")}}>{WD[d]}</button>)}
+        </div>
+        <div style={{fontSize:13,fontWeight:700,color:"rgba(255,255,255,.7)",marginBottom:8}}>{WD[sdow]}曜日の候補</div>
+        {wC.length===0&&<div style={{fontSize:12,color:"rgba(255,255,255,.35)",marginBottom:8}}>未設定（デフォルト候補が使用されます）</div>}
+        <CL items={wC} onDel={i=>delW(sdow,i)}/>
+        <div style={{marginTop:12,display:"flex",flexDirection:"column",gap:10}}>
+          <MultiTimeSelect selected={wSelStarts} onChange={v=>toggleArr(wSelStarts,setWSelStarts,v)} label="開始時刻"/>
+          <MultiTimeSelect selected={wSelEnds} onChange={v=>toggleArr(wSelEnds,setWSelEnds,v)} label="終了時刻"/>
+          <button onClick={addW} style={{...AB,alignSelf:"flex-start"}}>＋ 追加</button>
+        </div>
+      </AC>}
+
+      {mode==="date"&&<AC title="📌 日付別候補（最優先）">
+        <div style={{marginBottom:14}}><AL>日付を選択</AL><input type="date" value={sdate} onChange={e=>setSdate(e.target.value)} style={{...AI,maxWidth:200}}/></div>
+        <div style={{fontSize:13,fontWeight:700,color:"rgba(255,255,255,.7)",marginBottom:8}}>{sdate.replace(/-/g,"/")} の候補</div>
+        {dC.length===0&&<div style={{fontSize:12,color:"rgba(255,255,255,.35)",marginBottom:8}}>未設定</div>}
+        <CL items={dC} onDel={i=>delD(sdate,i)}/>
+        <div style={{marginTop:12,display:"flex",flexDirection:"column",gap:10}}>
+          <MultiTimeSelect selected={dSelStarts} onChange={v=>toggleArr(dSelStarts,setDSelStarts,v)} label="開始時刻"/>
+          <MultiTimeSelect selected={dSelEnds} onChange={v=>toggleArr(dSelEnds,setDSelEnds,v)} label="終了時刻"/>
+          <button onClick={addD} style={{...AB,alignSelf:"flex-start"}}>＋ 追加</button>
+        </div>
+        {Object.keys(settings.dateCandidates||{}).length>0&&<div style={{marginTop:14}}>
+          <div style={{fontSize:12,fontWeight:700,color:"rgba(255,255,255,.5)",marginBottom:8}}>設定済みの日付</div>
+          <div style={{display:"flex",flexWrap:"wrap",gap:5}}>{Object.keys(settings.dateCandidates||{}).sort().map(dt=><button key={dt} onClick={()=>setSdate(dt)} style={{padding:"4px 9px",borderRadius:6,background:sdate===dt?"#06C755":"rgba(255,255,255,.08)",border:`1px solid ${sdate===dt?"#06C755":"rgba(255,255,255,.15)"}`,color:"white",fontSize:11,fontWeight:600,cursor:"pointer"}}>{dt.replace(/-/g,"/")}（{((settings.dateCandidates||{})[dt]||[]).length}件）</button>)}</div>
+        </div>}
+      </AC>}
+
+      {mode==="template"&&<AC title="📁 曜日別候補テンプレート">
+        <div style={{fontSize:13,color:"rgba(255,255,255,.5)",marginBottom:12}}>現在の曜日別候補をテンプレートとして保存し、後で再利用できます。</div>
+        <div style={{display:"flex",gap:8,marginBottom:16}}>
+          <input value={tmplName} onChange={e=>setTmplName(e.target.value)} placeholder="テンプレート名を入力" style={{...AI,flex:1}}/>
+          <button onClick={saveTemplate} style={AB}>保存</button>
+        </div>
+        {(settings.templates||[]).length===0&&<div style={{fontSize:13,color:"rgba(255,255,255,.3)"}}>保存済みテンプレートはありません</div>}
+        {(settings.templates||[]).map((t,i)=>(
+          <div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.08)",borderRadius:10,marginBottom:6}}>
+            <span style={{flex:1,fontSize:14,color:"white",fontWeight:600}}>{t.name}</span>
+            <button onClick={()=>applyTemplate(t)} style={{...AB,padding:"6px 12px",fontSize:12}}>適用</button>
+            <button onClick={()=>delTemplate(i)} style={AD}>削除</button>
+          </div>
+        ))}
+      </AC>}
+    </div>
+  );
+}
+
+// ===== 提出一覧タブ =====
+function SubsTab({subs,periods,staffList,onSave,tt}){
+  const[fn,setFn]=useState(""),[fp,setFp]=useState("all");
+  const[sf,setSf]=useState("submittedAt"),[sdr,setSdr]=useState("desc");
+  const[det,setDet]=useState(null);
+  const tg=f=>{if(sf===f)setSdr(d=>d==="asc"?"desc":"asc");else{setSf(f);setSdr("asc");}};
+  const fil=subs.filter(s=>(!fn||s.staffName.includes(fn))&&(fp==="all"||s.periodId===fp)).sort((a,b)=>{let va=sf==="submittedAt"?new Date(a[sf]).getTime():(a[sf]||""),vb=sf==="submittedAt"?new Date(b[sf]).getTime():(b[sf]||"");return(va<vb?-1:va>vb?1:0)*(sdr==="asc"?1:-1);});
+  const gpl=id=>periods.find(p=>p.id===id)?.label||"不明";
+  return(<div>
+    <AT>📥 提出一覧</AT>
+    <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap"}}>
+      <input value={fn} onChange={e=>setFn(e.target.value)} placeholder="🔍 氏名で絞り込み" style={{flex:1,minWidth:130,padding:"10px 14px",background:"rgba(255,255,255,.08)",border:"1px solid rgba(255,255,255,.12)",borderRadius:10,color:"white",fontSize:14,outline:"none"}}/>
+      <select value={fp} onChange={e=>setFp(e.target.value)} style={{padding:"10px 12px",background:"rgba(255,255,255,.08)",border:"1px solid rgba(255,255,255,.12)",borderRadius:10,color:"white",fontSize:13,outline:"none",cursor:"pointer"}}>
+        <option value="all" style={{background:"#1A1A2E"}}>全期間</option>
+        {periods.map(p=><option key={p.id} value={p.id} style={{background:"#1A1A2E"}}>{p.label}</option>)}
+      </select>
+    </div>
+    <div style={{marginBottom:12,fontSize:13,color:"rgba(255,255,255,.5)"}}>件数：<strong style={{color:"#4ADE80",fontSize:16}}>{fil.length}</strong></div>
+    <div style={{background:"rgba(255,255,255,.03)",border:"1px solid rgba(255,255,255,.07)",borderRadius:14,overflow:"hidden"}}>
+      <div style={{overflowX:"auto"}}>
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+          <thead><tr>
+            {[["staffName","氏名"],["submittedAt","提出日時"]].map(([f,l])=><th key={f} onClick={()=>tg(f)} style={{background:"rgba(255,255,255,.08)",color:"rgba(255,255,255,.7)",padding:"10px 14px",textAlign:"left",fontWeight:600,cursor:"pointer",whiteSpace:"nowrap",borderBottom:"1px solid rgba(255,255,255,.08)"}}>{l}{sf===f?(sdr==="asc"?" ▲":" ▼"):" ↕"}</th>)}
+            {["期間","出勤","休み","操作"].map(h=><th key={h} style={{background:"rgba(255,255,255,.08)",color:"rgba(255,255,255,.7)",padding:"10px 14px",textAlign:"left",fontWeight:600,whiteSpace:"nowrap",borderBottom:"1px solid rgba(255,255,255,.08)"}}>{h}</th>)}
+          </tr></thead>
+          <tbody>{fil.length===0
+            ?<tr><td colSpan={6} style={{textAlign:"center",color:"rgba(255,255,255,.3)",padding:24}}>提出データがありません</td></tr>
+            :fil.map(sub=>{const ds=Object.keys(sub.shifts||{}).sort(),wk=ds.filter(d=>sub.shifts[d]&&sub.shifts[d].status==="work").length,at=new Date(sub.submittedAt).toLocaleString("ja-JP",{month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"});return(<tr key={sub.id}>
+              <td style={{padding:"10px 14px",borderBottom:"1px solid rgba(255,255,255,.05)",color:"rgba(255,255,255,.9)",fontWeight:600}}>{sub.staffName}</td>
+              <td style={{padding:"10px 14px",borderBottom:"1px solid rgba(255,255,255,.05)",color:"rgba(255,255,255,.6)",whiteSpace:"nowrap"}}>{at}</td>
+              <td style={{padding:"10px 14px",borderBottom:"1px solid rgba(255,255,255,.05)",color:"rgba(255,255,255,.6)",fontSize:12}}>{gpl(sub.periodId)}</td>
+              <td style={{padding:"10px 14px",borderBottom:"1px solid rgba(255,255,255,.05)"}}><span style={{background:"rgba(6,199,85,.15)",color:"#4ADE80",border:"1px solid rgba(6,199,85,.3)",padding:"2px 8px",borderRadius:4,fontSize:12,fontWeight:600}}>{wk}日</span></td>
+              <td style={{padding:"10px 14px",borderBottom:"1px solid rgba(255,255,255,.05)"}}><span style={{background:"rgba(255,255,255,.06)",color:"rgba(255,255,255,.5)",padding:"2px 8px",borderRadius:4,fontSize:12}}>{ds.length-wk}日</span></td>
+              <td style={{padding:"10px 14px",borderBottom:"1px solid rgba(255,255,255,.05)",whiteSpace:"nowrap"}}>
+                <button onClick={()=>setDet(sub)} style={{padding:"5px 10px",background:"rgba(255,255,255,.08)",border:"1px solid rgba(255,255,255,.15)",borderRadius:6,color:"rgba(255,255,255,.8)",fontSize:12,cursor:"pointer",marginRight:4}}>詳細</button>
+                <button onClick={()=>{if(!confirm("削除しますか？"))return;onSave(subs.filter(s=>s.id!==sub.id));tt("🗑️ 削除しました");}} style={AD}>削除</button>
+              </td>
+            </tr>);})}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {det&&<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.6)",zIndex:500,display:"flex",alignItems:"flex-end",justifyContent:"center",animation:"fI .2s"}} onClick={()=>setDet(null)}>
+      <div style={{background:"#1E2130",borderRadius:"20px 20px 0 0",width:"100%",maxWidth:560,maxHeight:"88vh",overflow:"hidden",display:"flex",flexDirection:"column",animation:"sU .25s"}} onClick={e=>e.stopPropagation()}>
+        <div style={{width:36,height:4,background:"rgba(255,255,255,.15)",borderRadius:2,margin:"10px auto 0"}}/>
+        <div style={{padding:"12px 20px 14px",borderBottom:"1px solid rgba(255,255,255,.08)",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+          <div><div style={{fontSize:16,fontWeight:700,color:"white"}}>{det.staffName}</div><div style={{fontSize:12,color:"rgba(255,255,255,.4)",marginTop:2}}>{gpl(det.periodId)} ／ {new Date(det.submittedAt).toLocaleString("ja-JP")} 提出</div></div>
+          <button onClick={()=>setDet(null)} style={{background:"rgba(255,255,255,.08)",border:"none",borderRadius:"50%",width:32,height:32,color:"rgba(255,255,255,.7)",fontSize:18,cursor:"pointer"}}>✕</button>
+        </div>
+        <div style={{overflowY:"auto",padding:"8px 16px 24px"}}>
+          {det.comment&&<div style={{background:"rgba(255,255,255,.05)",borderRadius:8,padding:"10px 12px",margin:"8px 0",fontSize:13,color:"rgba(255,255,255,.7)"}}>💬 {det.comment}</div>}
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+            <thead><tr>{["日付","区分","出勤","退勤"].map(h=><th key={h} style={{background:"rgba(255,255,255,.08)",color:"rgba(255,255,255,.7)",padding:"8px 12px",textAlign:"left",fontWeight:600}}>{h}</th>)}</tr></thead>
+            <tbody>{Object.keys(det.shifts||{}).sort().map(ds=>{const d=pd(ds),s=det.shifts[ds],iw=s&&s.status==="work";return(<tr key={ds}>
+              <td style={{padding:"9px 12px",borderBottom:"1px solid rgba(255,255,255,.04)",color:"rgba(255,255,255,.7)"}}>{d.getMonth()+1}/{d.getDate()}（{WD[d.getDay()]}）</td>
+              <td style={{padding:"9px 12px",borderBottom:"1px solid rgba(255,255,255,.04)"}}>{iw?<span style={{background:"rgba(6,199,85,.15)",color:"#4ADE80",border:"1px solid rgba(6,199,85,.3)",padding:"2px 7px",borderRadius:4,fontSize:12,fontWeight:600}}>出勤</span>:<span style={{background:"rgba(255,255,255,.06)",color:"rgba(255,255,255,.5)",padding:"2px 7px",borderRadius:4,fontSize:12}}>休み</span>}</td>
+              <td style={{padding:"9px 12px",borderBottom:"1px solid rgba(255,255,255,.04)",color:"rgba(255,255,255,.8)"}}>{iw?s.start:"-"}</td>
+              <td style={{padding:"9px 12px",borderBottom:"1px solid rgba(255,255,255,.04)",color:"rgba(255,255,255,.8)"}}>{iw?s.end:"-"}</td>
+            </tr>);})}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>}
+  </div>);
+}
+
+// ===== 設定タブ =====
+function SetTab({settings,onSave,tt}){
+  const[pw,setPw]=useState("");
+  return(<div>
+    <AT>⚙️ システム設定</AT>
+    <AC title="🔐 パスワード変更">
+      <AL>新しいパスワード</AL>
+      <input type="password" value={pw} onChange={e=>setPw(e.target.value)} placeholder="新しいパスワードを入力" style={{...AI,maxWidth:280}}/>
+      <div style={{fontSize:12,color:"rgba(255,255,255,.35)",marginTop:4}}>初期パスワード: admin1234</div>
+      <div style={{marginTop:12}}><button onClick={()=>{if(!pw){tt("⚠️ 入力してください");return;}onSave({...settings,password:pw});setPw("");tt("✅ 変更しました");}} style={AB}>🔐 変更する</button></div>
+    </AC>
+  </div>);
+}
+
+// ============================================================
+// 共通UIパーツ
+// ============================================================
+function AC({title,children}){return(<div style={{background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.08)",borderRadius:16,padding:20,marginBottom:16}}><div style={{fontSize:14,fontWeight:700,color:"rgba(255,255,255,.85)",marginBottom:14}}>{title}</div>{children}</div>);}
+function AL({children}){return(<label style={{fontSize:13,fontWeight:600,color:"rgba(255,255,255,.6)",display:"block",marginBottom:6}}>{children}</label>);}
+function AT({children}){return(<div style={{fontSize:18,fontWeight:700,color:"white",marginBottom:16}}>{children}</div>);}
+function CL({items,onDel}){return items.map((c,i)=>(<div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.08)",borderRadius:10,marginBottom:6}}><span style={{flex:1,fontSize:14,color:"rgba(255,255,255,.9)",fontWeight:500}}>{c.start} 〜 {c.end}</span><button onClick={()=>onDel(i)} style={AD}>削除</button></div>));}
+const AI={width:"100%",padding:"11px 14px",background:"rgba(255,255,255,.08)",border:"1px solid rgba(255,255,255,.12)",borderRadius:10,color:"white",fontSize:14,outline:"none"};
+const AB={padding:"10px 18px",background:"#06C755",border:"none",borderRadius:9,color:"white",fontSize:14,fontWeight:700,cursor:"pointer"};
+const AD={padding:"6px 11px",background:"rgba(255,71,87,.15)",border:"1px solid rgba(255,71,87,.3)",borderRadius:6,color:"#FF8C94",fontSize:12,fontWeight:600,cursor:"pointer"};
+const AGray={padding:"10px 16px",background:"rgba(255,255,255,.06)",border:"1px solid rgba(255,255,255,.12)",borderRadius:9,color:"rgba(255,255,255,.7)",fontSize:14,cursor:"pointer"};
+
+ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));

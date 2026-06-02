@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#06C755">
+  <meta name="robots" content="noindex,nofollow">
+  <title>シフト管理</title>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0;}
+    body{font-family:'Hiragino Sans','Yu Gothic',sans-serif;background:#F0F2F5;-webkit-font-smoothing:antialiased;}
+    @keyframes sU{from{transform:translateY(60px);opacity:0}to{transform:translateY(0);opacity:1}}
+    @keyframes fI{from{opacity:0}to{opacity:1}}
+    @keyframes sI{from{transform:scale(.9);opacity:0}to{transform:scale(1);opacity:1}}
+    @keyframes bI{0%{transform:scale(0)}70%{transform:scale(1.15)}100%{transform:scale(1)}}
+    select,input,button,textarea{font-family:inherit;}
+    .dc{transition:box-shadow .2s;}
+    .dc:hover{box-shadow:0 4px 20px rgba(0,0,0,.12)!important;}
+    .cb:active{transform:scale(.96);}
+    input[type=date]{color-scheme:light;}
+    ::-webkit-scrollbar{width:4px;height:4px;}
+    ::-webkit-scrollbar-thumb{background:#d1d5db;border-radius:2px;}
+    .name-suggest{position:absolute;top:100%;left:0;right:0;background:#fff;border:1px solid #E5E7EB;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.12);z-index:200;max-height:200px;overflow-y:auto;margin-top:4px;}
+    .name-suggest-item{padding:12px 16px;cursor:pointer;font-size:15px;font-weight:600;color:#1A1A2E;}
+    .name-suggest-item:hover{background:#F0F2F5;}
+    .name-suggest-item:active{background:#E8F9EE;}
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel" src="app.js" data-presets="react"></script>
+</body>
+</html>
