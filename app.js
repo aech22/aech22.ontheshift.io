@@ -179,19 +179,28 @@ function setUrl(shops,shopId,period){
 function resolvePeriodFromUrl(shops,allPeriods){
   const parsed=parseUrl();
   if(!parsed)return null;
+  // 旧形式 (#p=xxx)
   if(parsed.legacyPid){
     const found=allPeriods.find(p=>p.id===parsed.legacyPid);
     return found?{period:found,shopId:found.shopId||shops[0]?.id}:null;
   }
   if(!parsed.slug)return null;
-  // shopIdxでshopを特定
-  let targetShops=shops;
-  if(parsed.shopIdx!==null&&shops[parsed.shopIdx]){
-    targetShops=[shops[parsed.shopIdx]];
+
+  // slugで全periodsを検索（shopId条件は緩めに）
+  const slug=parsed.slug;
+
+  // まずshopIdxで絞り込んで検索
+  if(parsed.shopIdx!=null&&shops[parsed.shopIdx]){
+    const targetShopId=shops[parsed.shopIdx].id;
+    const found=allPeriods.find(p=>makePeriodSlug(p)===slug&&(p.shopId===targetShopId||!p.shopId));
+    if(found)return{period:found,shopId:targetShopId};
   }
-  for(const shop of targetShops){
-    const found=allPeriods.find(p=>(p.shopId===shop.id||!p.shopId)&&makePeriodSlug(p)===parsed.slug);
-    if(found)return{period:found,shopId:shop.id};
+
+  // shopIdx指定なし or 見つからない → 全periodsからslugで検索
+  const found=allPeriods.find(p=>makePeriodSlug(p)===slug);
+  if(found){
+    const shopId=found.shopId||shops[0]?.id;
+    return{period:found,shopId};
   }
   return null;
 }
@@ -397,11 +406,15 @@ function App(){
       const r=resolvePeriodFromUrl(shops,periods);
       if(r){
         setApid(r.period.id);
-        setView("staff"); // 必ずスタッフ画面
+        // shopIdが違う場合は店舗も切り替え
+        if(r.shopId&&r.shopId!==sid)setCurrentShopId(r.shopId);
+        setView("staff");
         setUrlResolved(true);
         return;
       }
-      // slug一致なし（期間が存在しない）→ 最初のperiodを使用
+      // slug一致なし → slugを直接比較してデバッグ情報をログ出力
+      console.warn("slug一致なし:", parsed.slug, "利用可能なslug:", periods.map(p=>makePeriodSlug(p)));
+      // 最初のperiodを使用してスタッフ画面を表示
       if(!apid&&periods.length>0) setApid(periods[0].id);
       setView("staff");
       setUrlResolved(true);
@@ -870,11 +883,11 @@ function SmModal({subs,periods,apid,onClose,staffList,onEditSub,onEditByName}){
           <div style={{width:NW,flexShrink:0,display:"flex",flexDirection:"column",borderRight:"2px solid #E5E7EB",zIndex:2,background:"white"}}>
             <div style={{height:52,flexShrink:0,borderBottom:"2px solid #E5E7EB",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,color:"#6B7280",background:"#F9FAFB"}}>名前</div>
             <div ref={nameColRef} onScroll={e=>{if(dataColRef.current)dataColRef.current.scrollTop=e.currentTarget.scrollTop;}} style={{flex:1,overflowY:"scroll",overflowX:"hidden",scrollbarWidth:"none"}}>
-              {submitted.map(sub=>(
+              {submitted.map((sub,ri)=>(
                 <div key={sub.id} onClick={()=>handleNameClick(sub)}
-                  style={{height:72,borderBottom:"1px solid #E5E7EB",display:"flex",alignItems:"center",justifyContent:"center",padding:"6px",background:"white",cursor:"pointer",flexShrink:0}}
+                  style={{height:72,borderBottom:"2px solid #E5E7EB",display:"flex",alignItems:"center",justifyContent:"center",padding:"6px",background:ri%2===0?"white":"#FAFAFA",cursor:"pointer",flexShrink:0}}
                   onMouseEnter={e=>e.currentTarget.style.background="#E8F9EE"}
-                  onMouseLeave={e=>e.currentTarget.style.background="white"}>
+                  onMouseLeave={e=>e.currentTarget.style.background=ri%2===0?"white":"#FAFAFA"}>
                   <div style={{textAlign:"center"}}>
                     <div style={{fontSize:12,fontWeight:700,color:"#1A1A2E",wordBreak:"break-all",lineHeight:1.3}}>{sub.staffName}</div>
                     <div style={{fontSize:10,color:"#06C755",marginTop:2}}>✎ 修正</div>
@@ -900,17 +913,17 @@ function SmModal({subs,periods,apid,onClose,staffList,onEditSub,onEditByName}){
               <div style={{width:COMMENT_W,flexShrink:0,height:52,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,color:"#6B7280",borderRight:"1px solid #E5E7EB",borderLeft:"1px solid #E5E7EB"}}>コメント</div>
             </div>
             {/* データ行（ヘッダーと同じスクロールで横移動） */}
-            {submitted.map(sub=>(
-              <div key={sub.id} style={{display:"flex",height:72,borderBottom:"1px solid #E5E7EB",flexShrink:0,minWidth:"fit-content"}}>
+            {submitted.map((sub,ri)=>(
+              <div key={sub.id} style={{display:"flex",height:72,borderBottom:"2px solid #E5E7EB",flexShrink:0,minWidth:"fit-content",background:ri%2===0?"white":"#FAFAFA"}}>
                 {dates.map(ds=>{
                   const s=(sub.shifts||{})[ds]||null;
                   const iw=s&&s.status==="work";
                   const isEditing=editTarget&&editTarget.subId===sub.id&&editTarget.ds===ds;
                   return(
                     <div key={ds} onClick={()=>handleCellClick(sub,ds)}
-                      style={{width:CW,flexShrink:0,height:72,padding:"4px",borderRight:"1px solid #E5E7EB",borderLeft:"1px solid #E5E7EB",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,cursor:"pointer",background:isEditing?"#E8F9EE":"white"}}
-                      onMouseEnter={e=>{if(!isEditing)e.currentTarget.style.background="#F9FAFB";}}
-                      onMouseLeave={e=>{if(!isEditing)e.currentTarget.style.background=isEditing?"#E8F9EE":"white";}}>
+                      style={{width:CW,flexShrink:0,height:72,padding:"4px",borderRight:"1px solid #E5E7EB",borderLeft:"1px solid #E5E7EB",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,cursor:"pointer",background:isEditing?"#E8F9EE":"transparent"}}
+                      onMouseEnter={e=>{if(!isEditing)e.currentTarget.style.background="#F0FFF4";}}
+                      onMouseLeave={e=>{if(!isEditing)e.currentTarget.style.background="transparent";}}>
                       {iw?(<>
                         <div style={{fontSize:10,fontWeight:700,background:"#E8F9EE",color:"#15803D",padding:"1px 5px",borderRadius:3,border:"1px solid #C2F0D2"}}>出勤</div>
                         <div style={{fontSize:11,fontWeight:700,color:"#1A1A2E",whiteSpace:"nowrap"}}>{s.start||"--:--"}</div>
@@ -920,7 +933,7 @@ function SmModal({subs,periods,apid,onClose,staffList,onEditSub,onEditByName}){
                     </div>
                   );
                 })}
-                <div style={{width:COMMENT_W,flexShrink:0,height:72,padding:"6px 8px",borderRight:"1px solid #E5E7EB",display:"flex",alignItems:"center"}}>
+                <div style={{width:COMMENT_W,flexShrink:0,height:72,padding:"6px 8px",borderRight:"1px solid #E5E7EB",borderLeft:"1px solid #E5E7EB",display:"flex",alignItems:"center"}}>
                   <span style={{fontSize:11,color:"#6B7280",lineHeight:1.4,wordBreak:"break-all",display:"-webkit-box",WebkitLineClamp:3,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{sub.comment||""}</span>
                 </div>
               </div>
