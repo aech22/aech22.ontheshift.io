@@ -199,150 +199,181 @@ function resolvePeriodFromUrl(shops,allPeriods){
 // ============================================================
 // メインアプリ
 // ============================================================
+// ============================================================
+// メインアプリ - 3フェーズ初期化
+// ============================================================
 function App(){
   const[syncStatus,setSyncStatus]=useState("init");
-  const[dbReady,setDbReady]=useState(false); // firebaseDB が確実に使える状態
+  const[ready,setReady]=useState(false); // Phase1完了フラグ
 
-  // --- Firebase を同期的に初期化 ---
-  // モジュールレベルの firebaseDB を使うため、
-  // initFirebase() の完了を確認してから dbReady=true にする
+  const[shops,setShops]=useState([]);
+  const[currentShopId,setCurrentShopId]=useState(null);
+  const[view,setView]=useState("staff");
+  const[auth,setAuth]=useState(false);
+  const[settings,setSettings]=useState(null);
+  const[periods,setPeriods]=useState([]);
+  const[staffList,setStaffList]=useState([]);
+  const[subs,setSubs]=useState([]);
+  const[apid,setApid]=useState(null);
+  const[urlResolved,setUrlResolved]=useState(false);
+
+  // ===================================================================
+  // Phase1: Firebase初期化 → global/shopsをonceで読む → shops/sid確定
+  // ===================================================================
   useEffect(()=>{
     const configured = FIREBASE_CONFIG.apiKey !== "YOUR_API_KEY";
-    if(!configured){ setSyncStatus("no_config"); setDbReady(true); return; }
 
+    if(!configured){
+      // Firebase未設定: localStorageのみ
+      const local=lg("shift_shops_v6",null);
+      const sh=local&&local.length>0?local:[makeShop("メイン店舗")];
+      setShops(sh); ls("shift_shops_v6",sh);
+      setCurrentShopId(sh[0].id);
+      setSyncStatus("no_config");
+      setReady(true);
+      return;
+    }
+
+    // Firebase SDK 初期化
     try{
       if(!firebase.apps||firebase.apps.length===0) firebase.initializeApp(FIREBASE_CONFIG);
       firebaseDB = firebase.database();
-      // 接続監視
-      firebaseDB.ref(".info/connected").on("value", snap=>{
-        const on = snap.val()===true;
-        firebaseEnabled = on;
-        setSyncStatus(on?"online":"offline");
+      firebaseDB.ref(".info/connected").on("value",snap=>{
+        firebaseEnabled=snap.val()===true;
+        setSyncStatus(firebaseEnabled?"online":"offline");
       });
-      setDbReady(true);
     }catch(e){
-      console.warn("Firebase初期化失敗:", e);
-      setSyncStatus("offline");
-      setDbReady(true);
+      console.warn("Firebase init failed:",e);
+      const local=lg("shift_shops_v6",null)||[makeShop("メイン店舗")];
+      setShops(local); setCurrentShopId(local[0].id);
+      setSyncStatus("offline"); setReady(true); return;
     }
+
+    // global/shops を1回だけ読む（onceで）→ 全端末でIDを統一
+    firebaseDB.ref("global/shops").once("value").then(snap=>{
+      const val=snap.val();
+      let sh;
+      if(val){
+        // Firebaseにデータあり → そのまま使う（端末間でIDを統一）
+        sh=Array.isArray(val)?val.filter(Boolean):Object.values(val);
+        console.log("Firebase shops取得:", sh.length,"件");
+      } else {
+        // Firebaseにデータなし → localまたは新規作成してFirebaseに書く
+        const local=lg("shift_shops_v6",null);
+        sh=local&&local.length>0?local:[makeShop("メイン店舗")];
+        firebaseDB.ref("global/shops").set(sh);
+        console.log("Firebase shops新規作成:", sh.length,"件");
+      }
+      setShops(sh);
+      ls("shift_shops_v6",sh);
+      setCurrentShopId(sh[0].id);
+      setReady(true);
+    }).catch(e=>{
+      console.warn("shops読み込み失敗:",e);
+      const local=lg("shift_shops_v6",null)||[makeShop("メイン店舗")];
+      setShops(local); setCurrentShopId(local[0].id); setReady(true);
+    });
+
     return()=>{ if(firebaseDB) firebaseDB.ref(".info/connected").off(); };
   },[]);
-
-  // --- 状態 ---
-  const[shops,setShops]=useState(()=>{
-    const s=lg("shift_shops_v6",null);
-    if(s&&s.length>0)return s;
-    const sh=makeShop("メイン店舗"); ls("shift_shops_v6",[sh]); return[sh];
-  });
-  const[currentShopId,setCurrentShopId]=useState(()=>{
-    const s=lg("shift_shops_v6",null); return s&&s.length>0?s[0].id:null;
-  });
-  const[view,setView]=useState("staff");
-  const[auth,setAuth]=useState(false);
 
   const shop=shops.find(s=>s.id===currentShopId)||shops[0];
   const sid=shop?.id||"default";
 
-  const[settings,setSettings]=useState(()=>lg(storeKey(sid,"settings_v6"),makeSettings(sid)));
-  const[periods,setPeriods]=useState(()=>{
-    const s=lg(storeKey(sid,"periods_v6"),null);
-    if(s&&s.length>0)return s;
-    const p=makePeriod(sid); ls(storeKey(sid,"periods_v6"),[p]); return[p];
-  });
-  const[staffList,setStaffList]=useState(()=>lg(storeKey(sid,"staff_v6"),[]));
-  const[subs,setSubs]=useState(()=>lg(storeKey(sid,"subs_v6"),[]));
-  const[apid,setApid]=useState(()=>{
-    const allShops=lg("shift_shops_v6",[]);
-    const allPeriods=allShops.flatMap(sh=>lg(storeKey(sh.id,"periods_v6"),[]));
-    const r=resolvePeriodFromUrl(allShops,allPeriods);
-    if(r)return r.period.id;
-    const s=lg(storeKey(sid,"periods_v6"),null);
-    return s&&s.length>0?s[0].id:null;
-  });
-  const[urlResolved,setUrlResolved]=useState(false);
-
-  // --- Firebase: global/shops 購読 (dbReadyになったら即開始) ---
+  // ===================================================================
+  // Phase2: sid確定後、全データをリアルタイム購読
+  // ===================================================================
   useEffect(()=>{
-    if(!dbReady||!firebaseDB)return;
-    const ref=firebaseDB.ref("global/shops");
-    ref.on("value",snap=>{
-      const val=snap.val();
+    if(!ready||!sid||!firebaseDB)return;
+    console.log("Phase2: 購読開始 sid=",sid);
+    const refs=[];
+    const on=(path,cb)=>{
+      const r=firebaseDB.ref(path);
+      r.on("value",snap=>cb(snap.val()),err=>console.warn("購読失敗:",path,err));
+      refs.push(r);
+    };
+
+    // global/shops をリアルタイム購読（店舗追加・変更を全端末に反映）
+    on("global/shops",val=>{
       if(!val)return;
       const arr=Array.isArray(val)?val.filter(Boolean):Object.values(val);
       if(arr.length>0){ setShops(arr); ls("shift_shops_v6",arr); }
     });
-    // 自端末のshopsをFirebaseへ送信（初回同期）
-    const local=lg("shift_shops_v6",null);
-    if(local&&local.length>0) firebaseDB.ref("global/shops").set(local);
-    return()=>ref.off();
-  },[dbReady]);
 
-  // --- Firebase: 店舗別データ購読 ---
-  useEffect(()=>{
-    if(!dbReady||!firebaseDB||!sid)return;
-    const refs=[];
-    const sub=(path,cb)=>{
-      const r=firebaseDB.ref(path);
-      r.on("value",snap=>cb(snap.val()));
-      refs.push(r);
-    };
-    sub(fbPath(sid,"settings"),val=>{
+    // 店舗別データ
+    on(fbPath(sid,"settings"),val=>{
       if(val&&typeof val==="object"){ setSettings(val); ls(storeKey(sid,"settings_v6"),val); }
+      else{ const def=makeSettings(sid); setSettings(def); }
     });
-    sub(fbPath(sid,"periods"),val=>{
-      if(!val)return;
-      const arr=Array.isArray(val)?val.filter(Boolean):Object.values(val);
-      if(arr.length>0){ setPeriods(arr); ls(storeKey(sid,"periods_v6"),arr); }
+    on(fbPath(sid,"periods"),val=>{
+      const arr=val?(Array.isArray(val)?val.filter(Boolean):Object.values(val)):[];
+      setPeriods(arr); ls(storeKey(sid,"periods_v6"),arr);
     });
-    sub(fbPath(sid,"staff"),val=>{
-      if(!val)return;
-      const arr=Array.isArray(val)?val.filter(Boolean):Object.values(val);
+    on(fbPath(sid,"staff"),val=>{
+      const arr=val?(Array.isArray(val)?val.filter(Boolean):Object.values(val)):[];
       setStaffList(arr); ls(storeKey(sid,"staff_v6"),arr);
     });
-    sub(fbPath(sid,"subs"),val=>{
-      if(!val){ setSubs([]); ls(storeKey(sid,"subs_v6"),[]); return; }
-      const arr=Array.isArray(val)?val.filter(Boolean):Object.values(val);
+    on(fbPath(sid,"subs"),val=>{
+      const arr=val?(Array.isArray(val)?val.filter(Boolean):Object.values(val)):[];
       setSubs(arr); ls(storeKey(sid,"subs_v6"),arr);
     });
-    return()=>refs.forEach(r=>r.off());
-  },[dbReady,sid]);
 
-  // --- 店舗切り替え時ローカルからプリロード ---
-  useEffect(()=>{
-    if(!sid)return;
-    setSettings(lg(storeKey(sid,"settings_v6"),makeSettings(sid)));
-    const ps=lg(storeKey(sid,"periods_v6"),null);
-    if(ps&&ps.length>0)setPeriods(ps);
-    else{ const p=makePeriod(sid); ls(storeKey(sid,"periods_v6"),[p]); setPeriods([p]); }
-    setStaffList(lg(storeKey(sid,"staff_v6"),[]));
-    setSubs(lg(storeKey(sid,"subs_v6"),[]));
-  },[sid]);
+    // settingsがFirebaseにない場合デフォルトを書き込む
+    firebaseDB.ref(fbPath(sid,"settings")).once("value").then(snap=>{
+      if(!snap.val()){ const def=makeSettings(sid); firebaseDB.ref(fbPath(sid,"settings")).set(def); }
+    });
 
-  // --- URL解決 (shops/periodsが揃ってから) ---
+    return()=>{ console.log("Phase2: 購読解除 sid=",sid); refs.forEach(r=>r.off()); };
+  },[ready,sid]);
+
+  // ===================================================================
+  // Phase3: periods確定後にURL解決・apid初期化
+  // ===================================================================
   useEffect(()=>{
-    if(urlResolved)return;
+    if(!ready||urlResolved)return;
     const parsed=parseUrl();
-    if(!parsed){ setUrlResolved(true); return; }
-    if(parsed.shopIdx!=null&&shops.length>0){
+    if(!parsed){
+      if(periods.length>0){ if(!apid)setApid(periods[0].id); setUrlResolved(true); }
+      return;
+    }
+    // shopIdxでshop切り替え
+    if(parsed.shopIdx!=null&&shops.length>parsed.shopIdx){
       const ts=shops[parsed.shopIdx];
       if(ts&&ts.id!==sid){ setCurrentShopId(ts.id); return; }
     }
+    // slugでperiod解決
     if(parsed.slug&&periods.length>0){
       const r=resolvePeriodFromUrl(shops,periods);
       if(r){ setApid(r.period.id); setView("staff"); setUrlResolved(true); return; }
     }
-    if(shops.length>0&&(periods.length>0||!parsed.slug)) setUrlResolved(true);
-  },[shops,periods,urlResolved,sid]);
+    // periods待ち
+    if(periods.length>0){ if(!apid)setApid(periods[0].id); setUrlResolved(true); }
+  },[ready,shops,periods,urlResolved,sid,apid]);
 
-  // --- 保存関数 ---
-  const w=(path,local,set,val)=>{ set(val); ls(local,val); if(firebaseDB) firebaseDB.ref(path).set(val); };
-  const saveSettings=useCallback(v=>w(fbPath(sid,"settings"),storeKey(sid,"settings_v6"),setSettings,v),[sid]);
-  const savePeriods =useCallback(v=>w(fbPath(sid,"periods"), storeKey(sid,"periods_v6"), setPeriods, v),[sid]);
-  const saveStaff   =useCallback(v=>w(fbPath(sid,"staff"),   storeKey(sid,"staff_v6"),   setStaffList,v),[sid]);
-  const saveSubs    =useCallback(v=>w(fbPath(sid,"subs"),    storeKey(sid,"subs_v6"),    setSubs,     v),[sid]);
-  const saveShops   =useCallback(v=>{ setShops(v); ls("shift_shops_v6",v); if(firebaseDB) firebaseDB.ref("global/shops").set(v); },[]);
+  // periodsが来たらapidを設定
+  useEffect(()=>{ if(!apid&&periods.length>0)setApid(periods[0].id); },[periods]);
+
+  // ===================================================================
+  // 保存関数（Firebase + localStorage 二重書き）
+  // ===================================================================
+  const fbW=(path,val)=>{ if(firebaseDB) firebaseDB.ref(path).set(val).catch(e=>console.warn("書き込み失敗:",path,e)); };
+  const saveSettings=useCallback(v=>{ setSettings(v); ls(storeKey(sid,"settings_v6"),v); fbW(fbPath(sid,"settings"),v); },[sid]);
+  const savePeriods =useCallback(v=>{ setPeriods(v);  ls(storeKey(sid,"periods_v6"),v);  fbW(fbPath(sid,"periods"),v);  },[sid]);
+  const saveStaff   =useCallback(v=>{ setStaffList(v);ls(storeKey(sid,"staff_v6"),v);    fbW(fbPath(sid,"staff"),v);    },[sid]);
+  const saveSubs    =useCallback(v=>{ setSubs(v);      ls(storeKey(sid,"subs_v6"),v);     fbW(fbPath(sid,"subs"),v);     },[sid]);
+  const saveShops   =useCallback(v=>{ setShops(v);     ls("shift_shops_v6",v);            fbW("global/shops",v);         },[]);
 
   const ap=periods.find(p=>p.id===apid)||periods[0];
+  const effectiveSettings=settings||makeSettings(sid);
+
+  // ローディング画面（Phase1完了まで）
+  if(!ready) return(
+    <div style={{display:"flex",alignItems:"center",justifyContent:"center",minHeight:"100vh",background:"#1A1A2E",flexDirection:"column",gap:16}}>
+      <div style={{fontSize:40}}>📅</div>
+      <div style={{color:"white",fontSize:16,fontWeight:700}}>シフト管理システム</div>
+      <div style={{color:"rgba(255,255,255,.5)",fontSize:13}}>データを読み込み中...</div>
+    </div>
+  );
 
   return(
     <div style={{fontFamily:"'Hiragino Sans','Yu Gothic',sans-serif",minHeight:"100vh",background:view==="admin"?"#1A1A2E":"#F0F2F5"}}>
@@ -353,7 +384,7 @@ function App(){
           if(!firebaseDB){alert("firebaseDB=null\nFirebase SDKが読み込まれていません");return;}
           firebaseDB.ref("debug_test").set({t:Date.now(),msg:"接続テスト"})
             .then(()=>alert("✅ Firebase書き込み成功！\n同期は正常です"))
-            .catch(e=>alert("❌ Firebase書き込み失敗:\n"+e.message+"\n\nFirebaseのセキュリティルールを確認してください"));
+            .catch(e=>alert("❌ Firebase書き込み失敗:\n"+e.message));
         }} style={{background:"rgba(255,255,255,.25)",border:"none",borderRadius:6,padding:"2px 8px",color:"white",fontSize:11,fontWeight:700,cursor:"pointer"}}>🔍 接続テスト</button>
       </div>
       {/* タブ */}
@@ -362,17 +393,17 @@ function App(){
         <button onClick={()=>setView("admin")} style={{flex:1,padding:"13px 0",border:"none",cursor:"pointer",fontSize:14,fontWeight:700,background:view==="admin"?"#16213E":"#111827",color:"white"}}>⚙️ 管理者画面</button>
       </div>
       {view==="staff"
-        ?<StaffView periods={periods} ap={ap} apid={apid} setApid={setApid} shopId={sid} settings={settings} subs={subs} staffList={staffList}
+        ?<StaffView periods={periods} ap={ap} apid={apid} setApid={setApid} shopId={sid} settings={effectiveSettings} subs={subs} staffList={staffList}
             onSub={sub=>{
               const a=[...subs];const i=a.findIndex(s=>s.staffName===sub.staffName&&s.periodId===sub.periodId);
               if(i>=0)a[i]=sub;else a.push(sub);saveSubs(a);
             }} shopName={shop?.name}/>
         :auth
-          ?<AdminView settings={settings} periods={periods} subs={subs} staffList={staffList} shops={shops}
+          ?<AdminView settings={effectiveSettings} periods={periods} subs={subs} staffList={staffList} shops={shops}
               currentShopId={sid} saveSettings={saveSettings} savePeriods={savePeriods} saveSubs={saveSubs}
               saveStaff={saveStaff} saveShops={saveShops} setCurrentShopId={id=>setCurrentShopId(id)}
               logout={()=>setAuth(false)} syncStatus={syncStatus}/>
-          :<AdminLogin settings={settings} onAuth={()=>setAuth(true)}/>
+          :<AdminLogin settings={effectiveSettings} onAuth={()=>setAuth(true)}/>
       }
     </div>
   );
