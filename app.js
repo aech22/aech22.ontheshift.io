@@ -23,43 +23,61 @@ const FIREBASE_CONFIG = {
 // Firebase SDK の初期化
 let firebaseDB = null;
 let firebaseEnabled = false;
+let onConnectChange = null; // 接続状態変化コールバック
 
-function initFirebase() {
+function initFirebase(onStatusChange) {
   try {
-    if (typeof firebase === "undefined") { console.warn("Firebase SDK未読込み"); return; }
+    if (typeof firebase === "undefined") {
+      console.warn("Firebase SDK未読込み");
+      onStatusChange && onStatusChange("offline");
+      return;
+    }
+    // 既に初期化済みなら再利用
     if (!firebase.apps || firebase.apps.length === 0) {
       firebase.initializeApp(FIREBASE_CONFIG);
     }
     firebaseDB = firebase.database();
-    // 接続確認
+    onConnectChange = onStatusChange;
+
+    // 接続状態をリアルタイム監視
     firebaseDB.ref(".info/connected").on("value", snap => {
-      firebaseEnabled = snap.val() === true;
-      console.log("Firebase:", firebaseEnabled ? "接続済み" : "切断中");
+      const connected = snap.val() === true;
+      firebaseEnabled = connected;
+      console.log("Firebase接続状態:", connected ? "オンライン" : "オフライン");
+      onStatusChange && onStatusChange(connected ? "online" : "offline");
     });
   } catch(e) {
     console.warn("Firebase初期化失敗:", e.message);
     firebaseEnabled = false;
+    onStatusChange && onStatusChange("offline");
   }
 }
 
 // Firebase パス生成（店舗ID + キー）
 function fbPath(shopId, key) { return `shops/${shopId}/${key}`; }
 
-// Firebase への書き込み（失敗時はlocalStorageにフォールバック）
+// Firebase への書き込み
 function fbSet(path, val) {
-  if (firebaseEnabled && firebaseDB) {
-    return firebaseDB.ref(path).set(val).catch(e => console.warn("fbSet失敗:", e));
+  if (firebaseDB) {
+    return firebaseDB.ref(path).set(val)
+      .then(() => console.log("fbSet OK:", path))
+      .catch(e => console.warn("fbSet失敗:", path, e.message));
   }
   return Promise.resolve();
 }
 
-// Firebase のリアルタイム購読（onValue）
+// Firebase リアルタイム購読
 function fbOn(path, cb) {
-  if (firebaseEnabled && firebaseDB) {
+  if (firebaseDB) {
     const ref = firebaseDB.ref(path);
-    ref.on("value", snap => cb(snap.val()));
+    ref.on("value", snap => {
+      const val = snap.val();
+      console.log("fbOn受信:", path, val !== null ? "データあり" : "null");
+      cb(val);
+    }, err => console.warn("fbOn失敗:", path, err.message));
     return () => ref.off("value");
   }
+  // Firebase未初期化 → 何もしない
   return () => {};
 }
 
@@ -133,14 +151,23 @@ function App(){
   // Firebase初期化
   useEffect(()=>{
     const isConfigured = FIREBASE_CONFIG.apiKey !== "YOUR_API_KEY";
-    if(!isConfigured){ setSyncStatus("no_config"); setFbReady(true); return; }
-    initFirebase();
-    // 接続状態監視
-    const checkInterval = setInterval(()=>{
-      if(firebaseEnabled!==undefined){ setSyncStatus(firebaseEnabled?"online":"offline"); }
-    },1000);
+    if(!isConfigured){
+      setSyncStatus("no_config");
+      setFbReady(true);
+      return;
+    }
+    // 接続状態変化をコールバックで受け取る
+    initFirebase(status => {
+      setSyncStatus(status);
+      if(!fbReady) setFbReady(true);
+    });
+    // 初期化直後はまず"offline"として画面を出す
+    setSyncStatus("offline");
     setFbReady(true);
-    return ()=>clearInterval(checkInterval);
+    return () => {
+      // クリーンアップ：接続監視を解除
+      if(firebaseDB) firebaseDB.ref(".info/connected").off("value");
+    };
   },[]);
 
   // 店舗一覧（localStorageのみ）
@@ -176,39 +203,53 @@ function App(){
 
   // ===== Firebase リアルタイム購読 =====
   useEffect(()=>{
-    if(!sid||!fbReady)return;
+    if(!sid||!fbReady||!firebaseDB)return;
+    console.log("Firebase購読開始 shopId:", sid);
     const unsubs=[];
+
     // settings
     unsubs.push(fbOn(fbPath(sid,"settings"),val=>{
-      if(val){setSettings(val);ls(storeKey(sid,"settings_v6"),val);}
-    }));
-    // periods
-    unsubs.push(fbOn(fbPath(sid,"periods"),val=>{
-      if(val&&Array.isArray(val)&&val.length>0){
-        setPeriods(val);ls(storeKey(sid,"periods_v6"),val);
-      } else if(val&&typeof val==="object"){
-        const arr=Object.values(val);
-        if(arr.length>0){setPeriods(arr);ls(storeKey(sid,"periods_v6"),arr);}
+      if(val&&typeof val==="object"){
+        setSettings(val);
+        ls(storeKey(sid,"settings_v6"),val);
       }
     }));
+
+    // periods（配列 or オブジェクト両対応）
+    unsubs.push(fbOn(fbPath(sid,"periods"),val=>{
+      if(!val)return;
+      const arr=Array.isArray(val)?val.filter(Boolean):Object.values(val);
+      if(arr.length>0){
+        setPeriods(arr);
+        ls(storeKey(sid,"periods_v6"),arr);
+      }
+    }));
+
     // staff
     unsubs.push(fbOn(fbPath(sid,"staff"),val=>{
-      if(val){
-        const arr=Array.isArray(val)?val:Object.values(val);
-        setStaffList(arr);ls(storeKey(sid,"staff_v6"),arr);
-      }
+      if(!val)return;
+      const arr=Array.isArray(val)?val.filter(Boolean):Object.values(val);
+      setStaffList(arr);
+      ls(storeKey(sid,"staff_v6"),arr);
     }));
+
     // subs（最重要：リアルタイム同期のコア）
     unsubs.push(fbOn(fbPath(sid,"subs"),val=>{
-      if(val){
-        const arr=Array.isArray(val)?val:Object.values(val);
-        setSubs(arr);ls(storeKey(sid,"subs_v6"),arr);
-      } else {
-        setSubs([]);ls(storeKey(sid,"subs_v6"),[]);
+      if(!val){
+        setSubs([]);
+        ls(storeKey(sid,"subs_v6"),[]);
+        return;
       }
+      const arr=Array.isArray(val)?val.filter(Boolean):Object.values(val);
+      setSubs(arr);
+      ls(storeKey(sid,"subs_v6"),arr);
     }));
-    return()=>unsubs.forEach(u=>u&&u());
-  },[sid,fbReady]);
+
+    return()=>{
+      console.log("Firebase購読解除 shopId:", sid);
+      unsubs.forEach(u=>u&&u());
+    };
+  },[sid,fbReady,syncStatus]); // syncStatusが"online"になったら再購読
 
   // 店舗切り替え時にlocalStorageからリロード（Firebaseが拾う前の初期表示用）
   useEffect(()=>{
@@ -248,19 +289,19 @@ function App(){
 
   const ap=periods.find(p=>p.id===apid)||periods[0];
 
-  // 同期ステータスバッジ
+  // 同期ステータスバッジ（常時表示）
   const syncBadge = syncStatus==="online"
-    ? {bg:"#06C755",text:"🔴 ライブ同期中"}
+    ? {bg:"#06C755",text:"🔴 ライブ同期中 — 全端末にリアルタイム反映"}
     : syncStatus==="offline"
-    ? {bg:"#F59E0B",text:"⚠️ オフライン"}
+    ? {bg:"#F59E0B",text:"⚠️ オフライン — ローカル保存中（再接続を待機中）"}
     : syncStatus==="no_config"
-    ? {bg:"#6B7280",text:"⚙️ Firebase未設定"}
-    : null;
+    ? {bg:"#6B7280",text:"⚙️ Firebase未設定 — ローカルのみ保存"}
+    : {bg:"#6B7280",text:"⏳ 接続中..."};
 
   return(
     <div style={{fontFamily:"'Hiragino Sans','Yu Gothic',sans-serif",minHeight:"100vh",background:view==="admin"?"#1A1A2E":"#F0F2F5"}}>
       {/* 同期ステータスバー */}
-      {syncBadge&&<div style={{background:syncBadge.bg,color:"white",fontSize:11,fontWeight:700,textAlign:"center",padding:"4px 0",letterSpacing:".03em"}}>{syncBadge.text}</div>}
+      <div style={{background:syncBadge.bg,color:"white",fontSize:11,fontWeight:700,textAlign:"center",padding:"4px 0",letterSpacing:".03em",transition:"background .5s"}}>{syncBadge.text}</div>
       {/* タブ */}
       <div style={{display:"flex",position:"sticky",top:0,zIndex:100,boxShadow:"0 2px 8px rgba(0,0,0,.15)"}}>
         <button onClick={()=>setView("staff")} style={{flex:1,padding:"13px 0",border:"none",cursor:"pointer",fontSize:14,fontWeight:700,background:view==="staff"?"#06C755":"#1A1A2E",color:"white"}}>📅 スタッフ画面</button>
