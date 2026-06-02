@@ -443,16 +443,19 @@ function App(){
 
   return(
     <div style={{fontFamily:"'Hiragino Sans','Yu Gothic',sans-serif",minHeight:"100vh",background:view==="admin"?"#1A1A2E":"#F0F2F5"}}>
-      {/* デバッグ・同期ステータスバー */}
-      <div style={{background:syncStatus==="online"?"#06C755":syncStatus==="offline"?"#F59E0B":"#6B7280",color:"white",fontSize:11,fontWeight:700,textAlign:"center",padding:"4px 8px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-        <span>{syncStatus==="online"?"🟢 Firebase接続中":syncStatus==="offline"?"🟡 オフライン":syncStatus==="no_config"?"⚙️ 未設定":"⏳ 接続中..."}</span>
+      {/* 同期ステータスバー（接続中以外のみ表示） */}
+      {syncStatus!=="online"&&<div style={{background:syncStatus==="offline"?"#F59E0B":"#6B7280",color:"white",fontSize:11,fontWeight:700,textAlign:"center",padding:"4px 8px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <span>{syncStatus==="offline"?"🟡 オフライン（再接続中...）":syncStatus==="no_config"?"⚙️ Firebase未設定":"⏳ 接続中..."}</span>
         <button onClick={()=>{
-          if(!firebaseDB){alert("firebaseDB=null\nFirebase SDKが読み込まれていません");return;}
+          if(!firebaseDB){alert("firebaseDB=null
+Firebase SDKが読み込まれていません");return;}
           firebaseDB.ref("debug_test").set({t:Date.now(),msg:"接続テスト"})
-            .then(()=>alert("✅ Firebase書き込み成功！\n同期は正常です"))
-            .catch(e=>alert("❌ Firebase書き込み失敗:\n"+e.message));
-        }} style={{background:"rgba(255,255,255,.25)",border:"none",borderRadius:6,padding:"2px 8px",color:"white",fontSize:11,fontWeight:700,cursor:"pointer"}}>🔍 接続テスト</button>
-      </div>
+            .then(()=>alert("✅ Firebase書き込み成功！
+同期は正常です"))
+            .catch(e=>alert("❌ Firebase書き込み失敗:
+"+e.message));
+        }} style={{background:"rgba(255,255,255,.25)",border:"none",borderRadius:6,padding:"2px 8px",color:"white",fontSize:11,fontWeight:700,cursor:"pointer"}}>🔍 テスト</button>
+      </div>}
       {/* タブ */}
       <div style={{display:"flex",position:"sticky",top:0,zIndex:100,boxShadow:"0 2px 8px rgba(0,0,0,.15)"}}>
         <button onClick={()=>setView("staff")} style={{flex:1,padding:"13px 0",border:"none",cursor:"pointer",fontSize:14,fontWeight:700,background:view==="staff"?"#06C755":"#1A1A2E",color:"white"}}>📅 スタッフ画面</button>
@@ -843,12 +846,10 @@ function SmModal({subs,periods,apid,onClose,staffList,onEditSub,onEditByName}){
             {notSubmitted.length>0&&<div style={{fontSize:13,color:"#9CA3AF"}}>未提出：{notSubmitted.join("、")}</div>}
           </div>
         :<div style={{flex:1,display:"flex",overflow:"hidden"}}>
-          {/* 左固定：名前列（ヘッダー＋データ） */}
-          <div style={{width:NW,flexShrink:0,display:"flex",flexDirection:"column",borderRight:"2px solid #E5E7EB",zIndex:2}}>
-            {/* 名前ヘッダー */}
-            <div style={{height:52,flexShrink:0,borderBottom:"1px solid #E5E7EB",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,color:"#6B7280",background:"#F9FAFB"}}>名前</div>
-            {/* 名前データ（スクロール同期） */}
-            <div ref={nameColRef} onScroll={syncScroll(nameColRef,dataColRef)} style={{flex:1,overflowY:"scroll",overflowX:"hidden",scrollbarWidth:"none"}}>
+          {/* 左固定：名前列 */}
+          <div style={{width:NW,flexShrink:0,display:"flex",flexDirection:"column",borderRight:"2px solid #E5E7EB",zIndex:2,background:"white"}}>
+            <div style={{height:52,flexShrink:0,borderBottom:"2px solid #E5E7EB",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,color:"#6B7280",background:"#F9FAFB"}}>名前</div>
+            <div ref={nameColRef} onScroll={e=>{if(dataColRef.current)dataColRef.current.scrollTop=e.currentTarget.scrollTop;}} style={{flex:1,overflowY:"scroll",overflowX:"hidden",scrollbarWidth:"none"}}>
               {submitted.map(sub=>(
                 <div key={sub.id} onClick={()=>handleNameClick(sub)}
                   style={{height:72,borderBottom:"1px solid #E5E7EB",display:"flex",alignItems:"center",justifyContent:"center",padding:"6px",background:"white",cursor:"pointer",flexShrink:0}}
@@ -863,46 +864,47 @@ function SmModal({subs,periods,apid,onClose,staffList,onEditSub,onEditByName}){
             </div>
           </div>
 
-          {/* 右スクロール：日付列（ヘッダー＋データ） */}
-          <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-            {/* 日付ヘッダー（横スクロールは dataColRef に連動するためref設定） */}
-            <div id="sm-date-header" style={{height:52,flexShrink:0,overflowX:"hidden",borderBottom:"1px solid #E5E7EB",background:"#F9FAFB",display:"flex"}}>
-              {dates.map(ds=>{const d=pd(ds),m=d.getMonth()+1,day=d.getDate(),dow=d.getDay(),wd=WD[dow],iS=dow===6,iSu=dow===0||isHoliday(ds);return(
-                <div key={ds} style={{width:CW,flexShrink:0,textAlign:"center",height:52,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",borderRight:"1px solid #E5E7EB"}}>
-                  <div style={{fontSize:13,fontWeight:700,color:"#1A1A2E"}}>{m}/{day}</div>
-                  <div style={{fontSize:11,fontWeight:700,padding:"1px 6px",borderRadius:4,background:iS?"#EFF6FF":iSu?"#FFF0F1":"#F0F2F5",color:iS?"#3B82F6":iSu?"#FF4757":"#6B7280",marginTop:2}}>{wd}{isHoliday(ds)?"祝":""}</div>
-                </div>
-              );})}
-              <div style={{width:COMMENT_W,flexShrink:0,height:52,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,color:"#6B7280",borderRight:"1px solid #E5E7EB"}}>コメント</div>
-            </div>
-            {/* データ本体（縦横スクロール・名前列と縦同期） */}
-            <div ref={dataColRef} onScroll={syncScroll(dataColRef,nameColRef)} style={{flex:1,overflow:"auto"}}>
-              {submitted.map(sub=>(
-                <div key={sub.id} style={{display:"flex",height:72,borderBottom:"1px solid #E5E7EB",flexShrink:0}}>
-                  {dates.map(ds=>{
-                    const s=(sub.shifts||{})[ds]||null;
-                    const iw=s&&s.status==="work";
-                    const isEditing=editTarget&&editTarget.subId===sub.id&&editTarget.ds===ds;
-                    return(
-                      <div key={ds} onClick={()=>handleCellClick(sub,ds)}
-                        style={{width:CW,flexShrink:0,height:72,padding:"4px",borderRight:"1px solid #E5E7EB",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,cursor:"pointer",background:isEditing?"#E8F9EE":"white"}}
-                        onMouseEnter={e=>{if(!isEditing)e.currentTarget.style.background="#F9FAFB";}}
-                        onMouseLeave={e=>{if(!isEditing)e.currentTarget.style.background=isEditing?"#E8F9EE":"white";}}>
-                        {iw?(<>
-                          <div style={{fontSize:10,fontWeight:700,background:"#E8F9EE",color:"#15803D",padding:"1px 5px",borderRadius:3,border:"1px solid #C2F0D2"}}>出勤</div>
-                          <div style={{fontSize:11,fontWeight:700,color:"#1A1A2E",whiteSpace:"nowrap"}}>{s.start||"--:--"}</div>
-                          <div style={{fontSize:9,color:"#9CA3AF"}}>〜</div>
-                          <div style={{fontSize:11,fontWeight:700,color:"#1A1A2E",whiteSpace:"nowrap"}}>{s.end||"--:--"}</div>
-                        </>):(<div style={{fontSize:13,color:"#D1D5DB"}}>🌙</div>)}
-                      </div>
-                    );
-                  })}
-                  <div style={{width:COMMENT_W,flexShrink:0,height:72,padding:"6px 8px",borderRight:"1px solid #E5E7EB",display:"flex",alignItems:"center"}}>
-                    <span style={{fontSize:11,color:"#6B7280",lineHeight:1.4,wordBreak:"break-all",display:"-webkit-box",WebkitLineClamp:3,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{sub.comment||""}</span>
+          {/* 右側：ヘッダー行 + データ行を同一スクロールコンテナに */}
+          <div ref={dataColRef} onScroll={e=>{if(nameColRef.current)nameColRef.current.scrollTop=e.currentTarget.scrollTop;}} style={{flex:1,overflow:"auto"}}>
+            {/* 日付ヘッダー行（sticky で上固定、横スクロールに追従） */}
+            <div style={{display:"flex",position:"sticky",top:0,zIndex:5,background:"#F9FAFB",borderBottom:"2px solid #E5E7EB",minWidth:"fit-content"}}>
+              {dates.map(ds=>{
+                const d=pd(ds),m=d.getMonth()+1,day=d.getDate(),dow=d.getDay(),wd=WD[dow],iS=dow===6,iSu=dow===0||isHoliday(ds);
+                return(
+                  <div key={ds} style={{width:CW,flexShrink:0,textAlign:"center",height:52,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",borderRight:"1px solid #E5E7EB",borderLeft:"1px solid #E5E7EB"}}>
+                    <div style={{fontSize:13,fontWeight:700,color:"#1A1A2E"}}>{m}/{day}</div>
+                    <div style={{fontSize:11,fontWeight:700,padding:"1px 6px",borderRadius:4,background:iS?"#EFF6FF":iSu?"#FFF0F1":"#F0F2F5",color:iS?"#3B82F6":iSu?"#FF4757":"#6B7280",marginTop:2}}>{wd}{isHoliday(ds)?"祝":""}</div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
+              <div style={{width:COMMENT_W,flexShrink:0,height:52,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,color:"#6B7280",borderRight:"1px solid #E5E7EB",borderLeft:"1px solid #E5E7EB"}}>コメント</div>
             </div>
+            {/* データ行（ヘッダーと同じスクロールで横移動） */}
+            {submitted.map(sub=>(
+              <div key={sub.id} style={{display:"flex",height:72,borderBottom:"1px solid #E5E7EB",flexShrink:0,minWidth:"fit-content"}}>
+                {dates.map(ds=>{
+                  const s=(sub.shifts||{})[ds]||null;
+                  const iw=s&&s.status==="work";
+                  const isEditing=editTarget&&editTarget.subId===sub.id&&editTarget.ds===ds;
+                  return(
+                    <div key={ds} onClick={()=>handleCellClick(sub,ds)}
+                      style={{width:CW,flexShrink:0,height:72,padding:"4px",borderRight:"1px solid #E5E7EB",borderLeft:"1px solid #E5E7EB",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,cursor:"pointer",background:isEditing?"#E8F9EE":"white"}}
+                      onMouseEnter={e=>{if(!isEditing)e.currentTarget.style.background="#F9FAFB";}}
+                      onMouseLeave={e=>{if(!isEditing)e.currentTarget.style.background=isEditing?"#E8F9EE":"white";}}>
+                      {iw?(<>
+                        <div style={{fontSize:10,fontWeight:700,background:"#E8F9EE",color:"#15803D",padding:"1px 5px",borderRadius:3,border:"1px solid #C2F0D2"}}>出勤</div>
+                        <div style={{fontSize:11,fontWeight:700,color:"#1A1A2E",whiteSpace:"nowrap"}}>{s.start||"--:--"}</div>
+                        <div style={{fontSize:9,color:"#9CA3AF"}}>〜</div>
+                        <div style={{fontSize:11,fontWeight:700,color:"#1A1A2E",whiteSpace:"nowrap"}}>{s.end||"--:--"}</div>
+                      </>):(<div style={{fontSize:13,color:"#D1D5DB"}}>🌙</div>)}
+                    </div>
+                  );
+                })}
+                <div style={{width:COMMENT_W,flexShrink:0,height:72,padding:"6px 8px",borderRight:"1px solid #E5E7EB",display:"flex",alignItems:"center"}}>
+                  <span style={{fontSize:11,color:"#6B7280",lineHeight:1.4,wordBreak:"break-all",display:"-webkit-box",WebkitLineClamp:3,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{sub.comment||""}</span>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       }
@@ -1246,42 +1248,52 @@ function CandTab({settings,onSave,tt}){
   const[selDates,setSelDates]=useState([tds]);
   const[newDate,setNewDate]=useState(tds);
   // 複数選択用
-  const[selStarts,setSelStarts]=useState([]);
-  const[selEnds,setSelEnds]=useState([]);
-  const[wSelStarts,setWSelStarts]=useState([]);
-  const[wSelEnds,setWSelEnds]=useState([]);
-  const[dSelStarts,setDSelStarts]=useState([]);
-  const[dSelEnds,setDSelEnds]=useState([]);
+  const[selStart,setSelStart]=useState("");
+  const[selEnd,setSelEnd]=useState("");
+  const[wSelStart,setWSelStart]=useState("");
+  const[wSelEnd,setWSelEnd]=useState("");
+  const[dSelStart,setDSelStart]=useState("");
+  const[dSelEnd,setDSelEnd]=useState("");
   const[tmplName,setTmplName]=useState("");
 
   const toggleArr=(arr,setArr,val)=>setArr(prev=>prev.includes(val)?prev.filter(v=>v!==val):[...prev,val]);
 
   const addG=()=>{
-    if(selStarts.length===0||selEnds.length===0){tt("⚠️ 開始・終了を選択してください");return;}
-    const newC=[];
-    selStarts.forEach(s=>selEnds.forEach(e=>{if(s<e||(Number(s.replace(":","")))<=Number(e.replace(":","")))newC.push({start:s,end:e});}));
-    const merged=sc([...(settings.candidates||[]),...newC.filter(nc=>!(settings.candidates||[]).some(c=>c.start===nc.start&&c.end===nc.end))]);
-    onSave({...settings,candidates:merged});setSelStarts([]);setSelEnds([]);tt(`✅ ${newC.length}件追加`);
+    if(!selStart||!selEnd){tt("⚠️ 開始・終了を選択してください");return;}
+    if(selStart>=selEnd){tt("⚠️ 退勤は出勤より後にしてください");return;}
+    const nc={start:selStart,end:selEnd};
+    if((settings.candidates||[]).some(c=>c.start===nc.start&&c.end===nc.end)){tt("⚠️ 同じ時間帯が既に登録されています");return;}
+    const merged=sc([...(settings.candidates||[]),nc]);
+    onSave({...settings,candidates:merged});setSelStart("");setSelEnd("");tt(`✅ ${selStart}〜${selEnd} を追加`);
   };
   const delG=i=>{const c=[...(settings.candidates||[])];c.splice(i,1);onSave({...settings,candidates:c});};
 
   const addW=()=>{
-    if(wSelStarts.length===0||wSelEnds.length===0){tt("⚠️ 開始・終了を選択してください");return;}
+    if(!wSelStart||!wSelEnd){tt("⚠️ 開始・終了を選択してください");return;}
+    if(wSelStart>=wSelEnd){tt("⚠️ 退勤は出勤より後にしてください");return;}
     const w={...(settings.weekdayCandidates||{})};
-    const newC=[];wSelStarts.forEach(s=>wSelEnds.forEach(e=>newC.push({start:s,end:e})));
+    const nc={start:wSelStart,end:wSelEnd};
     let total=0;
-    selDows.forEach(dow=>{const b=w[dow]||[];const added=newC.filter(nc=>!b.some(c=>c.start===nc.start&&c.end===nc.end));w[dow]=sc([...b,...added]);total+=added.length;});
-    onSave({...settings,weekdayCandidates:w});setWSelStarts([]);setWSelEnds([]);tt(`✅ ${selDows.map(d=>WD[d]).join("・")}に${total}件追加`);
+    selDows.forEach(dow=>{
+      const b=w[dow]||[];
+      if(!b.some(c=>c.start===nc.start&&c.end===nc.end)){w[dow]=sc([...b,nc]);total++;}
+    });
+    onSave({...settings,weekdayCandidates:w});setWSelStart("");setWSelEnd("");
+    tt(total>0?`✅ ${selDows.map(d=>WD[d]).join("・")}に追加`:"⚠️ 既に登録済みです");
   };
   const delW=(d,i)=>{const w={...(settings.weekdayCandidates||{})};w[d]=[...(w[d]||[])];w[d].splice(i,1);onSave({...settings,weekdayCandidates:w});tt("🗑️ 削除しました");};
 
   const addD=()=>{
-    if(dSelStarts.length===0||dSelEnds.length===0){tt("⚠️ 開始・終了を選択してください");return;}
+    if(!dSelStart||!dSelEnd){tt("⚠️ 開始・終了を選択してください");return;}
+    if(dSelStart>=dSelEnd){tt("⚠️ 退勤は出勤より後にしてください");return;}
     const dc={...(settings.dateCandidates||{})};
-    const newC=[];dSelStarts.forEach(s=>dSelEnds.forEach(e=>newC.push({start:s,end:e})));
+    const nc={start:dSelStart,end:dSelEnd};
     let total=0;
-    selDates.forEach(dt=>{const added=newC.filter(nc=>!(dc[dt]||[]).some(c=>c.start===nc.start&&c.end===nc.end));dc[dt]=sc([...(dc[dt]||[]),...added]);total+=added.length;});
-    onSave({...settings,dateCandidates:dc});setDSelStarts([]);setDSelEnds([]);tt(`✅ ${selDates.length}日付に${total}件追加`);
+    selDates.forEach(dt=>{
+      if(!(dc[dt]||[]).some(c=>c.start===nc.start&&c.end===nc.end)){dc[dt]=sc([...(dc[dt]||[]),nc]);total++;}
+    });
+    onSave({...settings,dateCandidates:dc});setDSelStart("");setDSelEnd("");
+    tt(total>0?`✅ ${selDates.length}日付に追加`:"⚠️ 既に登録済みです");
   };
   const delD=(dt,i)=>{const dc={...(settings.dateCandidates||{})};dc[dt]=[...(dc[dt]||[])];dc[dt].splice(i,1);if(dc[dt].length===0)delete dc[dt];onSave({...settings,dateCandidates:dc});};
 
@@ -1304,14 +1316,14 @@ function CandTab({settings,onSave,tt}){
   // 選択中の日付の候補（複数選択時は全日付の和集合）
   const dC=selDates.length===1?((settings.dateCandidates||{})[selDates[0]]||[]):[];
 
-  const MultiTimeSelect=({selected,onChange,label})=>(
-    <div>
-      <div style={{fontSize:11,color:"rgba(255,255,255,.5)",marginBottom:4}}>{label}（複数選択可）</div>
-      <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
-        {TO.filter((_,i)=>i%2===0||TO[i]==="24:00").map(t=>(
-          <button key={t} onClick={()=>onChange(t)} style={{padding:"4px 8px",fontSize:12,fontWeight:600,background:selected.includes(t)?"#06C755":"rgba(255,255,255,.08)",color:selected.includes(t)?"white":"rgba(255,255,255,.7)",border:`1px solid ${selected.includes(t)?"#06C755":"rgba(255,255,255,.15)"}`,borderRadius:6,cursor:"pointer"}}>{t}</button>
-        ))}
-      </div>
+  const SingleTimeSelect=({value,onChange,label})=>(
+    <div style={{flex:1}}>
+      <div style={{fontSize:11,color:"rgba(255,255,255,.5)",marginBottom:4}}>{label}</div>
+      <select value={value} onChange={e=>onChange(e.target.value)}
+        style={{width:"100%",padding:"9px 10px",background:"rgba(255,255,255,.08)",border:"1px solid rgba(255,255,255,.12)",borderRadius:8,color:value?"white":"rgba(255,255,255,.4)",fontSize:14,outline:"none",cursor:"pointer"}}>
+        <option value="" style={{background:"#1A1A2E"}}>-- 選択 --</option>
+        {TO.map(t=><option key={t} value={t} style={{background:"#1A1A2E"}}>{t}</option>)}
+      </select>
     </div>
   );
 
@@ -1326,10 +1338,11 @@ function CandTab({settings,onSave,tt}){
 
       {mode==="global"&&<AC title="🌐 全体候補（優先度低）">
         <CL items={settings.candidates||[]} onDel={delG}/>
-        <div style={{marginTop:12,display:"flex",flexDirection:"column",gap:10}}>
-          <MultiTimeSelect selected={selStarts} onChange={v=>toggleArr(selStarts,setSelStarts,v)} label="開始時刻"/>
-          <MultiTimeSelect selected={selEnds} onChange={v=>toggleArr(selEnds,setSelEnds,v)} label="終了時刻"/>
-          <button onClick={addG} style={{...AB,alignSelf:"flex-start"}}>＋ 選択した組み合わせを追加</button>
+        <div style={{marginTop:12,display:"flex",gap:10,alignItems:"flex-end"}}>
+          <SingleTimeSelect value={selStart} onChange={setSelStart} label="出勤時刻"/>
+          <div style={{color:"rgba(255,255,255,.4)",paddingBottom:12,fontSize:16}}>〜</div>
+          <SingleTimeSelect value={selEnd} onChange={setSelEnd} label="退勤時刻"/>
+          <button onClick={addG} style={{...AB,whiteSpace:"nowrap",marginBottom:0}}>＋ 追加</button>
         </div>
       </AC>}
 
@@ -1346,10 +1359,11 @@ function CandTab({settings,onSave,tt}){
         {selDows.length>1&&<div style={{fontSize:12,color:"rgba(255,255,255,.5)",marginBottom:8,padding:"8px 12px",background:"rgba(255,255,255,.05)",borderRadius:8}}>
           選択中：{selDows.map(d=>WD[d]).join("・")} — 下で時刻を選んで追加します
         </div>}
-        <div style={{marginTop:12,display:"flex",flexDirection:"column",gap:10}}>
-          <MultiTimeSelect selected={wSelStarts} onChange={v=>toggleArr(wSelStarts,setWSelStarts,v)} label="開始時刻"/>
-          <MultiTimeSelect selected={wSelEnds} onChange={v=>toggleArr(wSelEnds,setWSelEnds,v)} label="終了時刻"/>
-          <button onClick={addW} style={{...AB,alignSelf:"flex-start"}}>＋ 追加</button>
+        <div style={{marginTop:12,display:"flex",gap:10,alignItems:"flex-end"}}>
+          <SingleTimeSelect value={wSelStart} onChange={setWSelStart} label="出勤時刻"/>
+          <div style={{color:"rgba(255,255,255,.4)",paddingBottom:12,fontSize:16}}>〜</div>
+          <SingleTimeSelect value={wSelEnd} onChange={setWSelEnd} label="退勤時刻"/>
+          <button onClick={addW} style={{...AB,whiteSpace:"nowrap"}}>＋ 追加</button>
         </div>
       </AC>}
 
@@ -1375,10 +1389,11 @@ function CandTab({settings,onSave,tt}){
           {dC.length===0&&<div style={{fontSize:12,color:"rgba(255,255,255,.35)",marginBottom:8}}>未設定</div>}
           <CL items={dC} onDel={i=>delD(selDates[0],i)}/>
         </>}
-        <div style={{marginTop:12,display:"flex",flexDirection:"column",gap:10}}>
-          <MultiTimeSelect selected={dSelStarts} onChange={v=>toggleArr(dSelStarts,setDSelStarts,v)} label="開始時刻"/>
-          <MultiTimeSelect selected={dSelEnds} onChange={v=>toggleArr(dSelEnds,setDSelEnds,v)} label="終了時刻"/>
-          <button onClick={addD} style={{...AB,alignSelf:"flex-start"}}>＋ 追加（{selDates.length}日付に適用）</button>
+        <div style={{marginTop:12,display:"flex",gap:10,alignItems:"flex-end"}}>
+          <SingleTimeSelect value={dSelStart} onChange={setDSelStart} label="出勤時刻"/>
+          <div style={{color:"rgba(255,255,255,.4)",paddingBottom:12,fontSize:16}}>〜</div>
+          <SingleTimeSelect value={dSelEnd} onChange={setDSelEnd} label="退勤時刻"/>
+          <button onClick={addD} style={{...AB,whiteSpace:"nowrap"}}>＋ 追加（{selDates.length}日付）</button>
         </div>
         {Object.keys(settings.dateCandidates||{}).length>0&&<div style={{marginTop:14}}>
           <div style={{fontSize:12,fontWeight:700,color:"rgba(255,255,255,.5)",marginBottom:8}}>設定済みの日付</div>
