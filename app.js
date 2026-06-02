@@ -220,16 +220,27 @@ function App(){
     setSyncStatus("offline");
     setFbReady(true);
     return () => {
-      // クリーンアップ：接続監視を解除
       if(firebaseDB) firebaseDB.ref(".info/connected").off("value");
     };
   },[]);
 
-  // 店舗一覧（localStorageのみ）
+  // fbReady後に既存shopsをFirebaseへ送信（他端末に伝える）
+  useEffect(()=>{
+    if(!fbReady||!firebaseDB)return;
+    const localShops=lg("shift_shops_v6",null);
+    if(localShops&&localShops.length>0){
+      fbSet("global/shops",localShops);
+    }
+  },[fbReady]);
+
+  // 店舗一覧（Firebase優先）
   const[shops,setShops]=useState(()=>{
     const s=lg("shift_shops_v6",null);
     if(s&&s.length>0)return s;
-    const sh=makeShop("メイン店舗");ls("shift_shops_v6",[sh]);return[sh];
+    const sh=makeShop("メイン店舗");ls("shift_shops_v6",[sh]);
+    // 初回作成時はFirebaseにも保存（fbReadyより先だがfirebaseDBがあれば送信）
+    if(typeof firebase!=="undefined"&&firebaseDB){fbSet("global/shops",[sh]);}
+    return[sh];
   });
   const[currentShopId,setCurrentShopId]=useState(()=>{
     const s=lg("shift_shops_v6",null);return(s&&s.length>0)?s[0].id:null;
@@ -263,13 +274,27 @@ function App(){
 
   // ===== Firebase リアルタイム購読 =====
   useEffect(()=>{
-    if(!sid||!fbReady)return;
-    // firebaseDBがまだなければ少し待って再試行
-    if(!firebaseDB){
-      const t=setTimeout(()=>{},500);
-      return()=>clearTimeout(t);
-    }
-    console.log("Firebase購読開始 shopId:", sid);
+    if(!fbReady||!firebaseDB)return;
+
+    const unsubs=[];
+
+    // ① global/shops を購読（全端末共有）
+    unsubs.push(fbOn("global/shops",val=>{
+      if(!val)return;
+      const arr=Array.isArray(val)?val.filter(Boolean):Object.values(val);
+      if(arr.length>0){
+        setShops(arr);
+        ls("shift_shops_v6",arr);
+      }
+    }));
+
+    return()=>unsubs.forEach(u=>u&&u());
+  },[fbReady]);
+
+  // sid が確定したら店舗別データを購読
+  useEffect(()=>{
+    if(!sid||!fbReady||!firebaseDB)return;
+
     const unsubs=[];
 
     // settings
@@ -280,7 +305,7 @@ function App(){
       }
     }));
 
-    // periods（配列 or オブジェクト両対応）
+    // periods
     unsubs.push(fbOn(fbPath(sid,"periods"),val=>{
       if(!val)return;
       const arr=Array.isArray(val)?val.filter(Boolean):Object.values(val);
@@ -298,34 +323,19 @@ function App(){
       ls(storeKey(sid,"staff_v6"),arr);
     }));
 
-    // subs（最重要：リアルタイム同期のコア）
+    // subs
     unsubs.push(fbOn(fbPath(sid,"subs"),val=>{
-      if(!val){
-        setSubs([]);
-        ls(storeKey(sid,"subs_v6"),[]);
-        return;
-      }
-      // Firebase はオブジェクト or 配列で返る → 正規化
-      const rawArr=Array.isArray(val)?val.filter(Boolean):Object.values(val);
-      // shiftsも同様に正規化（Firebase がオブジェクトで返す場合がある）
-      const normalized=rawArr.map(sub=>{
-        if(!sub||typeof sub!=="object")return sub;
-        // shiftsが存在する場合、各エントリを確認
-        if(sub.shifts&&typeof sub.shifts==="object"&&!Array.isArray(sub.shifts)){
-          // shiftsは {dateStr: {status,start,end}} 形式のまま使えるのでそのまま
-          return sub;
-        }
-        return sub;
-      });
-      setSubs(normalized);
-      ls(storeKey(sid,"subs_v6"),normalized);
+      if(!val){setSubs([]);ls(storeKey(sid,"subs_v6"),[]);return;}
+      const arr=Array.isArray(val)?val.filter(Boolean):Object.values(val);
+      setSubs(arr);
+      ls(storeKey(sid,"subs_v6"),arr);
     }));
 
     return()=>{
-      console.log("Firebase購読解除 shopId:", sid);
+      console.log("Firebase購読解除:", sid);
       unsubs.forEach(u=>u&&u());
     };
-  },[sid,fbReady]); // fbReadyになったら購読開始（syncStatus依存を削除）
+  },[sid,fbReady]);
 
   // 店舗切り替え時にlocalStorageからリロード（Firebaseが拾う前の初期表示用）
   useEffect(()=>{
@@ -338,28 +348,36 @@ function App(){
     setSubs(lg(storeKey(sid,"subs_v6"),[]));
   },[sid]);
 
-  // URLからshopId+periodを解決
+  // URLからshopIdx+slugを解決（shops/periodsが揃ってから実行）
   useEffect(()=>{
     if(urlShopResolved)return;
     const parsed=parseUrl();
     if(!parsed){setUrlShopResolved(true);return;}
-    // shopId解決
-    if(parsed.shopId){
-      const targetShop=shops.find(s=>s.id===parsed.shopId);
+
+    // shopIdx でshopを特定
+    if(parsed.shopIdx!==null&&parsed.shopIdx!==undefined&&shops.length>0){
+      const targetShop=shops[parsed.shopIdx];
       if(targetShop&&targetShop.id!==sid){
         setCurrentShopId(targetShop.id);
-        setUrlShopResolved(true);
+        // shopが変わったので periods の更新を待つ（再度このeffectが走る）
         return;
       }
     }
-    // period解決
-    const resolved=resolvePeriodFromUrl(shops,periods);
-    if(resolved){
-      setApid(resolved.period.id);
-      setView("staff");
+
+    // slug で period を解決
+    if(parsed.slug&&periods.length>0){
+      const resolved=resolvePeriodFromUrl(shops,periods);
+      if(resolved){
+        setApid(resolved.period.id);
+        setView("staff");
+        setUrlShopResolved(true);
+        return;
+      }
+      // periodsがまだ空かもしれないので待機（Firebaseから届くまで）
+      if(periods.length===0)return;
     }
     setUrlShopResolved(true);
-  },[shops,periods,urlShopResolved]);
+  },[shops,periods,urlShopResolved,sid]);
 
   // ===== 保存（Firebase + localStorage二重書き）=====
   const saveSettings=useCallback(s=>{
@@ -378,7 +396,7 @@ function App(){
     setSubs(s);ls(storeKey(sid,"subs_v6"),s);
     fbSet(fbPath(sid,"subs"),s);
   },[sid]);
-  const saveShops=useCallback(s=>{setShops(s);ls("shift_shops_v6",s);},[]);
+  const saveShops=useCallback(s=>{setShops(s);ls("shift_shops_v6",s);fbSet("global/shops",s);},[]);
 
   const ap=periods.find(p=>p.id===apid)||periods[0];
 
