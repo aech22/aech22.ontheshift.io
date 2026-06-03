@@ -357,20 +357,20 @@ function App(){
       }
       setStaffList(arr); ls(storeKey(sid,"staff_v6"),arr);
     });
+    // subs購読前にリセット（前の店舗のデータをクリア）
+    setSubs([]);
     on(fbPath(sid,"subs"),val=>{
       if(!val){ setSubs([]); ls(storeKey(sid,"subs_v6"),[]); return; }
-      // Firebase から {id: sub} 形式で返る → 配列に変換
       let arr;
       if(typeof val==="object"&&!Array.isArray(val)){
         arr=Object.values(val).filter(s=>s&&s.id);
       } else {
         arr=(Array.isArray(val)?val:Object.values(val)).filter(s=>s&&s.id);
       }
-      // submittedAt で降順ソート
       arr.sort((a,b)=>new Date(b.submittedAt)-new Date(a.submittedAt));
       setSubs(arr);
       ls(storeKey(sid,"subs_v6"),arr);
-      console.log("subs受信:", arr.length,"件");
+      console.log("subs受信:", arr.length,"件 sid=",sid);
     });
 
     // settingsがFirebaseにない場合デフォルトを書き込む
@@ -420,11 +420,11 @@ function App(){
   const saveSubs    =useCallback(v=>{
     setSubs(v);
     ls(storeKey(sid,"subs_v6"),v);
-    // Firebase には {id: sub} のオブジェクト形式で保存（配列はNG）
+    // Firebase には update() でマージ書き込み（set()は他端末データを上書きするためNG）
     if(firebaseDB){
       const obj={};
       v.forEach(s=>{ if(s&&s.id) obj[s.id]=s; });
-      firebaseDB.ref(fbPath(sid,"subs")).set(obj).catch(e=>console.warn("subs書き込み失敗:",e));
+      firebaseDB.ref(fbPath(sid,"subs")).update(obj).catch(e=>console.warn("subs書き込み失敗:",e));
     }
   },[sid]);
   const saveShops   =useCallback(v=>{
@@ -473,8 +473,16 @@ function App(){
         ?<StaffView periods={periods} ap={ap} apid={apid} setApid={setApid} shopId={sid} settings={effectiveSettings} subs={subs} staffList={staffList}
             urlLocked={urlLocked}
             onSub={sub=>{
+              // ローカルstateを更新
               const a=[...subs];const i=a.findIndex(s=>s.staffName===sub.staffName&&s.periodId===sub.periodId);
-              if(i>=0)a[i]=sub;else a.push(sub);saveSubs(a);
+              if(i>=0)a[i]=sub;else a.push(sub);
+              setSubs(a);
+              ls(storeKey(sid,"subs_v6"),a);
+              // Firebaseには該当の提出1件だけをupdate（他の提出を消さない）
+              if(firebaseDB){
+                const path=`${fbPath(sid,"subs")}/${sub.id}`;
+                firebaseDB.ref(path).set(sub).catch(e=>console.warn("sub書き込み失敗:",e));
+              }
             }} shopName={shop?.name}/>
         :(auth
           ?<AdminView settings={effectiveSettings} periods={periods} subs={subs} staffList={staffList} shops={shops}
