@@ -186,6 +186,7 @@ function App(){
 
   const[shops,setShops]=useState([]);
   const[currentShopId,setCurrentShopId]=useState(null);
+  const currentShopIdRef=useRef(null); // 常に最新のsidを参照するためのref
   const[view,setView]=useState("staff");
   const[auth,setAuth]=useState(true); // パスワード廃止
   const[settings,setSettings]=useState(null);
@@ -299,6 +300,8 @@ function App(){
 
   const shop=shops.find(s=>s.id===currentShopId)||shops[0];
   const sid=shop?.id||"default";
+  // refを常に最新のsidに同期
+  useEffect(()=>{ currentShopIdRef.current=sid; },[sid]);
 
   // ===================================================================
   // Phase2: sid確定後、全データをリアルタイム購読
@@ -473,15 +476,21 @@ function App(){
         ?<StaffView periods={periods} ap={ap} apid={apid} setApid={setApid} shopId={sid} settings={effectiveSettings} subs={subs} staffList={staffList}
             urlLocked={urlLocked}
             onSub={sub=>{
+              // 常に最新のsidをrefから取得
+              const currentSid=currentShopIdRef.current||sid;
               // ローカルstateを更新
               const a=[...subs];const i=a.findIndex(s=>s.staffName===sub.staffName&&s.periodId===sub.periodId);
               if(i>=0)a[i]=sub;else a.push(sub);
               setSubs(a);
-              ls(storeKey(sid,"subs_v6"),a);
-              // Firebaseには該当の提出1件だけをupdate（他の提出を消さない）
+              ls(storeKey(currentSid,"subs_v6"),a);
+              // Firebaseに1件だけ書き込み（他の提出を消さない）
               if(firebaseDB){
-                const path=`${fbPath(sid,"subs")}/${sub.id}`;
-                firebaseDB.ref(path).set(sub).catch(e=>console.warn("sub書き込み失敗:",e));
+                const path=`shops/${currentSid}/subs/${sub.id}`;
+                firebaseDB.ref(path).set(sub)
+                  .then(()=>console.log("提出完了 path=",path))
+                  .catch(e=>console.warn("sub書き込み失敗:",path,e));
+              } else {
+                console.warn("Firebase未接続: ローカルのみ保存");
               }
             }} shopName={shop?.name}/>
         :(auth
