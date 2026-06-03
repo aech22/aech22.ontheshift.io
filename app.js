@@ -193,21 +193,18 @@ function App(){
   const[ready,setReady]=useState(false); // Phase1完了フラグ
 
   const[shops,setShops]=useState([]);
-  // リロード時はsessionStorageから前回の状態を復元
-  const[currentShopId,setCurrentShopId]=useState(()=>ssGet(SS_SHOP,null));
-  const currentShopIdRef=useRef(ssGet(SS_SHOP,null));
-  const[view,setView]=useState(()=>{
-    // URLアクセス時は必ずstaff、それ以外はセッションから復元
-    const parsed=parseUrl();
-    if(parsed&&parsed.token)return"staff";
-    return ssGet(SS_VIEW,"staff");
-  });
+  // URLにtokenがある場合はsessionStorageを無視してPhase1で確定
+  const _hasUrlToken=!!(parseUrl()?.token);
+  const[currentShopId,setCurrentShopId]=useState(()=>_hasUrlToken?null:ssGet(SS_SHOP,null));
+  const currentShopIdRef=useRef(_hasUrlToken?null:ssGet(SS_SHOP,null));
+  const[view,setView]=useState(()=>_hasUrlToken?"staff":ssGet(SS_VIEW,"staff"));
   const[auth,setAuth]=useState(true); // パスワード廃止
   const[settings,setSettings]=useState(null);
   const[periods,setPeriods]=useState([]);
   const[staffList,setStaffList]=useState([]);
   const[subs,setSubs]=useState([]);
-  const[apid,setApid]=useState(()=>ssGet(SS_APID,null));
+  // URLトークンがある場合はapidもPhase1で確定させる
+  const[apid,setApid]=useState(()=>_hasUrlToken?null:ssGet(SS_APID,null));
   const[urlResolved,setUrlResolved]=useState(false);
 
   // ===================================================================
@@ -333,14 +330,13 @@ function App(){
 
   const shop=shops.find(s=>s.id===currentShopId)||shops[0];
   const sid=shop?.id||"default";
-  // refとsessionStorageを最新のsidに同期
+  // refとsessionStorageを最新のsidに同期（URLトークンがある場合は保存しない）
   useEffect(()=>{
     currentShopIdRef.current=sid;
-    ssSave(SS_SHOP,sid);
+    if(!_hasUrlToken) ssSave(SS_SHOP,sid);
   },[sid]);
-  // apid/viewもsessionStorageに保存
-  useEffect(()=>{ ssSave(SS_APID,apid); },[apid]);
-  useEffect(()=>{ ssSave(SS_VIEW,view); },[view]);
+  useEffect(()=>{ if(!_hasUrlToken) ssSave(SS_APID,apid); },[apid]);
+  useEffect(()=>{ if(!_hasUrlToken) ssSave(SS_VIEW,view); },[view]);
 
   // startSubscriptions: Phase1内でsid確定直後に呼ぶ（useEffectに依存しない）
   const activeSubsRef=useRef([]); // 購読中のrefリスト（クリーンアップ用）
@@ -415,13 +411,20 @@ function App(){
   useEffect(()=>{
     if(!ready||urlResolved)return;
     if(periods.length===0)return; // periodsが届くまで待機
-    // セッションに保存されたapidがperiodsに存在するか確認
+    // URLトークンがある場合はPhase1で解決済みなのでPhase3では何もしない
+    if(_hasUrlToken){
+      // apidはPhase1でセット済み。未セットの場合だけperiods[0]を使う
+      if(!apid&&periods.length>0) setApid(periods[0].id);
+      setUrlResolved(true);
+      return;
+    }
+    // URLなし: セッションに保存されたapidがperiodsに存在するか確認
     const savedApid=ssGet(SS_APID,null);
     const restored=savedApid?periods.find(p=>p.id===savedApid):null;
     if(restored){
-      setApid(restored.id); // セッションから復元
+      setApid(restored.id);
     } else if(!apid){
-      setApid(periods[0].id); // なければ最初のperiod
+      setApid(periods[0].id);
     }
     setUrlResolved(true);
   },[ready,periods,urlResolved]);
@@ -522,7 +525,14 @@ function App(){
         :(auth
           ?<AdminView settings={effectiveSettings} periods={periods} subs={subs} staffList={staffList} shops={shops}
               currentShopId={sid} saveSettings={saveSettings} savePeriods={savePeriods} saveSubs={saveSubs}
-              saveStaff={saveStaff} saveShops={saveShops} setCurrentShopId={id=>setCurrentShopId(id)}
+              saveStaff={saveStaff} saveShops={saveShops}
+              setCurrentShopId={id=>{
+                currentShopIdRef.current=id;
+                setCurrentShopId(id);
+                ssSave(SS_SHOP,id);
+                startSubscriptions(id,shops);
+              }}
+              startSubscriptions={startSubscriptions}
               logout={()=>setAuth(false)} syncStatus={syncStatus}/>
           :null)
       }
@@ -983,7 +993,7 @@ function AdminLogin({settings,onAuth}){
 // ============================================================
 // 管理者画面
 // ============================================================
-function AdminView({settings,periods,subs,staffList,shops,currentShopId,saveSettings,savePeriods,saveSubs,saveStaff,saveShops,setCurrentShopId,logout,syncStatus}){
+function AdminView({settings,periods,subs,staffList,shops,currentShopId,saveSettings,savePeriods,saveSubs,saveStaff,saveShops,setCurrentShopId,startSubscriptions,logout,syncStatus}){
   const[tab,setTab]=useState(()=>ssGet(SS_TAB,"periods"));
   useEffect(()=>ssSave(SS_TAB,tab),[tab]);
   const[toast,setToast]=useState(null);
@@ -1017,14 +1027,14 @@ function AdminView({settings,periods,subs,staffList,shops,currentShopId,saveSett
                       ))}
                       <div style={{borderTop:"1px solid #E5E7EB",padding:"8px 10px",display:"flex",gap:6}}>
                         <button onClick={()=>{setShopEditMode(v=>!v);}} style={{flex:1,padding:"7px",background:"#F0F2F5",border:"none",borderRadius:8,fontSize:12,fontWeight:600,color:"#1A1A2E",cursor:"pointer"}}>⚙️ 店舗編集</button>
-                        <button onClick={()=>{const name=prompt("新しい店舗名を入力");if(!name)return;const ns=makeShop(name.trim());saveShops([...shops,ns]);setCurrentShopId(ns.id);setShopMenuOpen(false);tt("✅ 店舗を追加しました");}} style={{flex:1,padding:"7px",background:"#06C755",border:"none",borderRadius:8,fontSize:12,fontWeight:700,color:"white",cursor:"pointer"}}>＋ 追加</button>
+                        <button onClick={()=>{const name=prompt("新しい店舗名を入力");if(!name)return;const ns=makeShop(name.trim());const newShops=[...shops,ns];saveShops(newShops);setCurrentShopId(ns.id);currentShopIdRef.current=ns.id;ssSave(SS_SHOP,ns.id);startSubscriptions(ns.id,newShops);setShopMenuOpen(false);tt("✅ 店舗を追加しました");}} style={{flex:1,padding:"7px",background:"#06C755",border:"none",borderRadius:8,fontSize:12,fontWeight:700,color:"white",cursor:"pointer"}}>＋ 追加</button>
                       </div>
                       {shopEditMode&&<div style={{borderTop:"1px solid #E5E7EB",padding:"10px"}}>
                         {shops.map(sh=>(
                           <div key={sh.id} style={{display:"flex",alignItems:"center",gap:6,marginBottom:6}}>
                             <span style={{flex:1,fontSize:13,color:"#1A1A2E"}}>{sh.name}</span>
                             <button onClick={()=>{const name=prompt("店舗名を変更",sh.name);if(!name)return;saveShops(shops.map(s=>s.id===sh.id?{...s,name:name.trim()}:s));tt("✅ 変更しました");}} style={{padding:"4px 8px",background:"#F0F2F5",border:"none",borderRadius:6,fontSize:11,cursor:"pointer"}}>✏️</button>
-                            {shops.length>1&&<button onClick={()=>{if(!confirm(`「${sh.name}」を削除しますか？`))return;const ns=shops.filter(s=>s.id!==sh.id);saveShops(ns);if(sh.id===currentShopId)setCurrentShopId(ns[0].id);tt("🗑️ 削除しました");}} style={{padding:"4px 8px",background:"rgba(255,71,87,.1)",border:"none",borderRadius:6,fontSize:11,color:"#FF4757",cursor:"pointer"}}>🗑️</button>}
+                            {shops.length>1&&<button onClick={()=>{if(!confirm(`「${sh.name}」を削除しますか？`))return;const ns=shops.filter(s=>s.id!==sh.id);saveShops(ns);if(sh.id===currentShopId){setCurrentShopId(ns[0].id);currentShopIdRef.current=ns[0].id;ssSave(SS_SHOP,ns[0].id);startSubscriptions(ns[0].id,ns);}tt("🗑️ 削除しました");}} style={{padding:"4px 8px",background:"rgba(255,71,87,.1)",border:"none",borderRadius:6,fontSize:11,color:"#FF4757",cursor:"pointer"}}>🗑️</button>}
                           </div>
                         ))}
                       </div>}
