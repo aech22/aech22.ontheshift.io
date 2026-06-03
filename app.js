@@ -104,7 +104,20 @@ const CAND_WEEKEND=[
 function fd(d){return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;}
 function pd(s){const[y,m,d]=s.split("-").map(Number);return new Date(y,m-1,d);}
 function gd(s,e){const r=[],st=pd(s),en=pd(e);let c=new Date(st);while(c<=en){r.push(fd(c));c.setDate(c.getDate()+1);}return r;}
-function gto(){const o=[];for(let h=0;h<=24;h++){const ms=h===24?[0]:[0,30];for(const m of ms)o.push(`${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`);}return o;}
+function gto(){
+  const o=[];
+  // 9:00〜24:00
+  for(let h=9;h<=24;h++){
+    const ms=h===24?[0]:[0,30];
+    for(const m of ms) o.push(`${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`);
+  }
+  // 翌0:30〜翌3:00（表示は25:00〜27:00形式）
+  for(let h=25;h<=27;h++){
+    const ms=h===27?[0]:[0,30];
+    for(const m of ms) o.push(`${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`);
+  }
+  return o;
+}
 const TO=gto();
 function idp(d){return d?new Date()>new Date(d+"T23:59:59"):false;}
 function lg(k,fb){try{const v=localStorage.getItem(k);return v?JSON.parse(v):fb;}catch{return fb;}}
@@ -568,12 +581,17 @@ function StaffView({periods,ap,apid,setApid,shopId,settings,subs,staffList,onSub
   const upd=(ds,u)=>setSd(p=>({...p,[ds]:{...p[ds],...u}}));
   const reset=()=>{const i={};dates.forEach(d=>{i[d]={status:"holiday"};});setSd(i);setDone(false);setComment("");tt_("🔄 リセットしました");};
 
-  // 候補取得（日付別→曜日別→デフォルト）
+  // 候補取得（日付別 > 祝日[key=7] > 曜日別 > 全体）
   const gc=ds=>{
+    // 1. 日付別（最優先）
     const dc=(settings.dateCandidates||{})[ds];if(dc&&dc.length>0)return dc;
+    // 2. 祝日（key=7）
+    if(isHoliday(ds)){const hc=(settings.weekdayCandidates||{})[7]||[];if(hc.length>0)return hc;}
+    // 3. 曜日別
     const dow=pd(ds).getDay();
-    if(isWeekend(ds)){const wdc=(settings.weekdayCandidates||{})[dow]||[];if(wdc.length>0)return wdc;return CAND_WEEKEND;}
     const wdc=(settings.weekdayCandidates||{})[dow]||[];if(wdc.length>0)return wdc;
+    // 4. 全体デフォルト
+    if(isWeekend(ds))return settings.candidates||CAND_WEEKEND;
     return settings.candidates||CAND_WEEKDAY;
   };
 
@@ -1510,7 +1528,7 @@ function CandTab({settings,onSave,tt}){
   const delTemplate=i=>{const ts=[...(settings.templates||[])];ts.splice(i,1);onSave({...settings,templates:ts});tt("🗑️ 削除しました");};
 
   // 選択中の曜日の候補（複数選択時は全曜日の和集合）
-  const wC=selDows.length===1?((settings.weekdayCandidates||{})[selDows[0]]||[]):[];
+  const wC=selDows.length===1?((settings.weekdayCandidates||{})[selDows[0]]||[]):[];// key=7は祝日候補
   // 選択中の日付の候補（複数選択時は全日付の和集合）
   const dC=selDates.length===1?((settings.dateCandidates||{})[selDates[0]]||[]):[];
 
@@ -1545,17 +1563,23 @@ function CandTab({settings,onSave,tt}){
       </AC>}
 
       {mode==="weekday"&&<AC title="📆 曜日別候補（全体より優先）">
-        <div style={{fontSize:12,color:"rgba(255,255,255,.4)",marginBottom:6}}>複数選択可（選択した全曜日にまとめて追加）</div>
+        <div style={{fontSize:12,color:"rgba(255,255,255,.4)",marginBottom:6}}>複数選択可 ／ 祝日は平日・土日より優先適用されます</div>
         <div style={{display:"flex",gap:4,flexWrap:"wrap",marginBottom:14}}>
-          {[0,1,2,3,4,5,6].map(d=>{const sel=selDows.includes(d);return(<button key={d} onClick={()=>setSelDows(prev=>prev.includes(d)?prev.filter(x=>x!==d):[...prev,d])} style={{padding:"7px 14px",borderRadius:20,fontSize:13,fontWeight:700,border:"1px solid",cursor:"pointer",background:sel?(d===6?"#3B82F6":d===0?"#FF4757":"#06C755"):"rgba(255,255,255,.05)",borderColor:sel?"transparent":(d===6?"rgba(147,197,253,.3)":d===0?"rgba(252,165,165,.3)":"rgba(255,255,255,.15)"),color:sel?"white":(d===6?"#93C5FD":d===0?"#FCA5A5":"rgba(255,255,255,.6)")}}>{WD[d]}</button>);})}
+          {/* 日〜土 */}
+          {[0,1,2,3,4,5,6].map(d=>{const sel=selDows.includes(d);const isSat=d===6,isSun=d===0;return(<button key={d} onClick={()=>setSelDows(prev=>prev.includes(d)?prev.filter(x=>x!==d):[...prev,d])} style={{padding:"7px 14px",borderRadius:20,fontSize:13,fontWeight:700,border:"1px solid",cursor:"pointer",background:sel?(isSat?"#3B82F6":isSun?"#FF4757":"#06C755"):"rgba(255,255,255,.05)",borderColor:sel?"transparent":(isSat?"rgba(147,197,253,.3)":isSun?"rgba(252,165,165,.3)":"rgba(255,255,255,.15)"),color:sel?"white":(isSat?"#93C5FD":isSun?"#FCA5A5":"rgba(255,255,255,.6)")}}>{WD[d]}</button>);})}
+          {/* 祝日（key=7） */}
+          {(()=>{const sel=selDows.includes(7);return(<button onClick={()=>setSelDows(prev=>prev.includes(7)?prev.filter(x=>x!==7):[...prev,7])} style={{padding:"7px 14px",borderRadius:20,fontSize:13,fontWeight:700,border:"1px solid",cursor:"pointer",background:sel?"#F59E0B":"rgba(255,255,255,.05)",borderColor:sel?"transparent":"rgba(253,230,138,.3)",color:sel?"white":"#FDE68A"}}>祝</button>);})()}
         </div>
         {selDows.length===1&&<>
-          <div style={{fontSize:13,fontWeight:700,color:"rgba(255,255,255,.7)",marginBottom:8}}>{WD[selDows[0]]}曜日の登録済み候補</div>
-          {wC.length===0&&<div style={{fontSize:12,color:"rgba(255,255,255,.35)",marginBottom:8}}>未設定（デフォルト候補が使用されます）</div>}
+          <div style={{fontSize:13,fontWeight:700,color:"rgba(255,255,255,.7)",marginBottom:8}}>
+            {selDows[0]===7?"祝日":WD[selDows[0]]+"曜日"}の登録済み候補
+            {selDows[0]===7&&<span style={{fontSize:11,color:"#FDE68A",marginLeft:8}}>（平日・土日より優先）</span>}
+          </div>
+          {wC.length===0&&<div style={{fontSize:12,color:"rgba(255,255,255,.35)",marginBottom:8}}>未設定{selDows[0]===7?"（祝日は曜日別候補にフォールバック）":"（デフォルト候補が使用されます）"}</div>}
           <CL items={wC} onDel={i=>delW(selDows[0],i)}/>
         </>}
         {selDows.length>1&&<div style={{fontSize:12,color:"rgba(255,255,255,.5)",marginBottom:8,padding:"8px 12px",background:"rgba(255,255,255,.05)",borderRadius:8}}>
-          選択中：{selDows.map(d=>WD[d]).join("・")} — 下で時刻を選んで追加します
+          選択中：{selDows.map(d=>d===7?"祝":WD[d]).join("・")} — 下で時刻を選んで追加します
         </div>}
         <div style={{marginTop:12,display:"flex",gap:10,alignItems:"flex-end"}}>
           <SingleTimeSelect value={wSelStart} onChange={setWSelStart} label="出勤時刻"/>
