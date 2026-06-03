@@ -180,20 +180,34 @@ function resolvePeriodFromUrl(shops,allPeriods){
 // ============================================================
 // メインアプリ - 3フェーズ初期化
 // ============================================================
+
+// リロード時の状態復元用セッションキー
+const SS_SHOP="ss_shopId";
+const SS_APID="ss_apid";
+const SS_VIEW="ss_view";
+const SS_TAB="ss_tab";
+function ssGet(k,fb){try{const v=sessionStorage.getItem(k);return v!==null?v:fb;}catch{return fb;}}
+function ssSave(k,v){try{if(v)sessionStorage.setItem(k,v);else sessionStorage.removeItem(k);}catch{}}
 function App(){
   const[syncStatus,setSyncStatus]=useState("init");
   const[ready,setReady]=useState(false); // Phase1完了フラグ
 
   const[shops,setShops]=useState([]);
-  const[currentShopId,setCurrentShopId]=useState(null);
-  const currentShopIdRef=useRef(null); // 常に最新のsidを参照するためのref
-  const[view,setView]=useState("staff");
+  // リロード時はsessionStorageから前回の状態を復元
+  const[currentShopId,setCurrentShopId]=useState(()=>ssGet(SS_SHOP,null));
+  const currentShopIdRef=useRef(ssGet(SS_SHOP,null));
+  const[view,setView]=useState(()=>{
+    // URLアクセス時は必ずstaff、それ以外はセッションから復元
+    const parsed=parseUrl();
+    if(parsed&&parsed.token)return"staff";
+    return ssGet(SS_VIEW,"staff");
+  });
   const[auth,setAuth]=useState(true); // パスワード廃止
   const[settings,setSettings]=useState(null);
   const[periods,setPeriods]=useState([]);
   const[staffList,setStaffList]=useState([]);
   const[subs,setSubs]=useState([]);
-  const[apid,setApid]=useState(null);
+  const[apid,setApid]=useState(()=>ssGet(SS_APID,null));
   const[urlResolved,setUrlResolved]=useState(false);
 
   // ===================================================================
@@ -272,11 +286,14 @@ function App(){
           }
           if(matched){
             console.log("URL解決(Phase1): shop=",matched.shop.name,"period=",matched.period.label);
-            setCurrentShopId(matched.shop.id);   // 正しい店舗をセット
-            setApid(matched.period.id);           // 正しい期間をセット
-            setUrlResolved(true);                 // Phase3不要
+            // currentShopIdRefを即時更新（Phase2がsidを参照する前に確定させる）
+            currentShopIdRef.current=matched.shop.id;
+            setCurrentShopId(matched.shop.id);
+            setApid(matched.period.id);
+            setUrlResolved(true);
           } else {
             console.warn("token一致なし(Phase1):", token);
+            currentShopIdRef.current=sh[0].id;
             setCurrentShopId(sh[0].id);
           }
           setReady(true);
@@ -285,8 +302,12 @@ function App(){
           setReady(true);
         });
       } else {
-        // URLなし: 通常通りshops[0]を使用
-        setCurrentShopId(sh[0].id);
+        // URLなし: セッションに保存された店舗があれば復元、なければshops[0]
+        const savedShopId=ssGet(SS_SHOP,null);
+        const restoredShop=savedShopId?sh.find(s=>s.id===savedShopId):null;
+        const targetShop=restoredShop||sh[0];
+        currentShopIdRef.current=targetShop.id;
+        setCurrentShopId(targetShop.id);
         setReady(true);
       }
     }).catch(e=>{
@@ -300,15 +321,23 @@ function App(){
 
   const shop=shops.find(s=>s.id===currentShopId)||shops[0];
   const sid=shop?.id||"default";
-  // refを常に最新のsidに同期
-  useEffect(()=>{ currentShopIdRef.current=sid; },[sid]);
+  // refとsessionStorageを最新のsidに同期
+  useEffect(()=>{
+    currentShopIdRef.current=sid;
+    ssSave(SS_SHOP,sid);
+  },[sid]);
+  // apid/viewもsessionStorageに保存
+  useEffect(()=>{ ssSave(SS_APID,apid); },[apid]);
+  useEffect(()=>{ ssSave(SS_VIEW,view); },[view]);
 
   // ===================================================================
   // Phase2: sid確定後、全データをリアルタイム購読
   // ===================================================================
   useEffect(()=>{
     if(!ready||!sid||!firebaseDB)return;
-    console.log("Phase2: 購読開始 sid=",sid);
+    // refから最新のsidを取得（バッチ更新で古いsidが来る場合に備える）
+    const effectiveSid=currentShopIdRef.current||sid;
+    console.log("Phase2: 購読開始 sid=",effectiveSid,"(state sid=",sid,")");
     const refs=[];
     const on=(path,cb)=>{
       const r=firebaseDB.ref(path);
@@ -329,11 +358,11 @@ function App(){
     });
 
     // 店舗別データ
-    on(fbPath(sid,"settings"),val=>{
-      if(val&&typeof val==="object"){ setSettings(val); ls(storeKey(sid,"settings_v6"),val); }
+    on(fbPath(effectiveSid,"settings"),val=>{
+      if(val&&typeof val==="object"){ setSettings(val); ls(storeKey(effectiveSid,"settings_v6"),val); }
       else{ const def=makeSettings(sid); setSettings(def); }
     });
-    on(fbPath(sid,"periods"),val=>{
+    on(fbPath(effectiveSid,"periods"),val=>{
       if(!val){ return; }
       let arr;
       if(typeof val==="object"&&!Array.isArray(val)){
@@ -343,10 +372,10 @@ function App(){
       }
       if(arr.length>0){
         arr.sort((a,b)=>new Date(b.createdAt||0)-new Date(a.createdAt||0));
-        setPeriods(arr); ls(storeKey(sid,"periods_v6"),arr);
+        setPeriods(arr); ls(storeKey(effectiveSid,"periods_v6"),arr);
       }
     });
-    on(fbPath(sid,"staff"),val=>{
+    on(fbPath(effectiveSid,"staff"),val=>{
       if(!val){ setStaffList([]); return; }
       // staffは文字列配列
       let arr;
@@ -358,12 +387,12 @@ function App(){
       } else {
         arr=[];
       }
-      setStaffList(arr); ls(storeKey(sid,"staff_v6"),arr);
+      setStaffList(arr); ls(storeKey(effectiveSid,"staff_v6"),arr);
     });
     // subs購読前にリセット（前の店舗のデータをクリア）
     setSubs([]);
-    on(fbPath(sid,"subs"),val=>{
-      if(!val){ setSubs([]); ls(storeKey(sid,"subs_v6"),[]); return; }
+    on(fbPath(effectiveSid,"subs"),val=>{
+      if(!val){ setSubs([]); ls(storeKey(effectiveSid,"subs_v6"),[]); return; }
       let arr;
       if(typeof val==="object"&&!Array.isArray(val)){
         arr=Object.values(val).filter(s=>s&&s.id);
@@ -372,30 +401,34 @@ function App(){
       }
       arr.sort((a,b)=>new Date(b.submittedAt)-new Date(a.submittedAt));
       setSubs(arr);
-      ls(storeKey(sid,"subs_v6"),arr);
+      ls(storeKey(effectiveSid,"subs_v6"),arr);
       console.log("subs受信:", arr.length,"件 sid=",sid);
     });
 
     // settingsがFirebaseにない場合デフォルトを書き込む
-    firebaseDB.ref(fbPath(sid,"settings")).once("value").then(snap=>{
-      if(!snap.val()){ const def=makeSettings(sid); firebaseDB.ref(fbPath(sid,"settings")).set(def); }
+    firebaseDB.ref(fbPath(effectiveSid,"settings")).once("value").then(snap=>{
+      if(!snap.val()){ const def=makeSettings(sid); firebaseDB.ref(fbPath(effectiveSid,"settings")).set(def); }
     });
 
-    return()=>{ console.log("Phase2: 購読解除 sid=",sid); refs.forEach(r=>r.off()); };
-  },[ready,sid]);
+    return()=>{ console.log("Phase2: 購読解除 sid=",effectiveSid); refs.forEach(r=>r.off()); };
+  },[ready,sid]); // sidの変化でPhase2再実行（effectiveSidはref経由で最新値）
 
   // URLにtokenが含まれるか（スタッフ専用モード・期間固定）
   const [urlLocked]=useState(()=>{ const p=parseUrl(); return !!(p&&p.token); });
 
   // ===================================================================
-  // Phase3: URLなし時のapid初期化のみ担当
-  // (URLあり時はPhase1で解決済み)
+  // Phase3: URLなし時のapid初期化（セッション復元優先）
   // ===================================================================
   useEffect(()=>{
     if(!ready||urlResolved)return;
-    // URLなし → 通常モード: periodsの最初をapidに設定
-    if(periods.length>0){
-      setApid(periods[0].id);
+    if(periods.length===0)return; // periodsが届くまで待機
+    // セッションに保存されたapidがperiodsに存在するか確認
+    const savedApid=ssGet(SS_APID,null);
+    const restored=savedApid?periods.find(p=>p.id===savedApid):null;
+    if(restored){
+      setApid(restored.id); // セッションから復元
+    } else if(!apid){
+      setApid(periods[0].id); // なければ最初のperiod
     }
     setUrlResolved(true);
   },[ready,periods,urlResolved]);
@@ -958,7 +991,8 @@ function AdminLogin({settings,onAuth}){
 // 管理者画面
 // ============================================================
 function AdminView({settings,periods,subs,staffList,shops,currentShopId,saveSettings,savePeriods,saveSubs,saveStaff,saveShops,setCurrentShopId,logout,syncStatus}){
-  const[tab,setTab]=useState("periods");
+  const[tab,setTab]=useState(()=>ssGet(SS_TAB,"periods"));
+  useEffect(()=>ssSave(SS_TAB,tab),[tab]);
   const[toast,setToast]=useState(null);
   const[shopMenuOpen,setShopMenuOpen]=useState(false);
   const[shopEditMode,setShopEditMode]=useState(false);
