@@ -286,19 +286,27 @@ function App(){
           }
           if(matched){
             console.log("URL解決(Phase1): shop=",matched.shop.name,"period=",matched.period.label);
-            // currentShopIdRefを即時更新（Phase2がsidを参照する前に確定させる）
             currentShopIdRef.current=matched.shop.id;
             setCurrentShopId(matched.shop.id);
             setApid(matched.period.id);
             setUrlResolved(true);
+            startSubscriptions(matched.shop.id,sh);
           } else {
             console.warn("token一致なし(Phase1):", token);
-            currentShopIdRef.current=sh[0].id;
-            setCurrentShopId(sh[0].id);
+            const savedShopId=ssGet(SS_SHOP,null);
+            const restoredShop=savedShopId?sh.find(s=>s.id===savedShopId):null;
+            const fallback=restoredShop||sh[0];
+            currentShopIdRef.current=fallback.id;
+            setCurrentShopId(fallback.id);
+            startSubscriptions(fallback.id,sh);
           }
           setReady(true);
         }).catch(()=>{
-          setCurrentShopId(sh[0].id);
+          const savedShopId=ssGet(SS_SHOP,null);
+          const restoredShop=savedShopId?sh.find(s=>s.id===savedShopId):null;
+          const fallback=restoredShop||sh[0];
+          setCurrentShopId(fallback.id);
+          startSubscriptions(fallback.id,sh);
           setReady(true);
         });
       } else {
@@ -308,12 +316,16 @@ function App(){
         const targetShop=restoredShop||sh[0];
         currentShopIdRef.current=targetShop.id;
         setCurrentShopId(targetShop.id);
+        // Phase1内で購読開始（sidが確定した直後）
+        startSubscriptions(targetShop.id,sh);
         setReady(true);
       }
     }).catch(e=>{
       console.warn("shops読み込み失敗:",e);
       const local=lg("shift_shops_v6",null)||[makeShop("メイン店舗")];
-      setShops(local); setCurrentShopId(local[0].id); setReady(true);
+      setShops(local); setCurrentShopId(local[0].id);
+      startSubscriptions(local[0].id,local);
+      setReady(true);
     });
 
     return()=>{ if(firebaseDB) firebaseDB.ref(".info/connected").off(); };
@@ -330,88 +342,69 @@ function App(){
   useEffect(()=>{ ssSave(SS_APID,apid); },[apid]);
   useEffect(()=>{ ssSave(SS_VIEW,view); },[view]);
 
-  // ===================================================================
-  // Phase2: sid確定後、全データをリアルタイム購読
-  // ===================================================================
-  useEffect(()=>{
-    if(!ready||!sid||!firebaseDB)return;
-    // refから最新のsidを取得（バッチ更新で古いsidが来る場合に備える）
-    const effectiveSid=currentShopIdRef.current||sid;
-    console.log("Phase2: 購読開始 sid=",effectiveSid,"(state sid=",sid,")");
-    const refs=[];
+  // startSubscriptions: Phase1内でsid確定直後に呼ぶ（useEffectに依存しない）
+  const activeSubsRef=useRef([]); // 購読中のrefリスト（クリーンアップ用）
+  const startSubscriptions=useCallback((targetSid,shopList)=>{
+    if(!firebaseDB)return;
+    // 既存の購読を解除
+    activeSubsRef.current.forEach(r=>r.off());
+    activeSubsRef.current=[];
+    const refs=activeSubsRef.current;
     const on=(path,cb)=>{
       const r=firebaseDB.ref(path);
       r.on("value",snap=>cb(snap.val()),err=>console.warn("購読失敗:",path,err));
       refs.push(r);
     };
+    console.log("購読開始 targetSid=",targetSid);
 
-    // global/shops をリアルタイム購読（店舗追加・変更を全端末に反映）
+    // global/shops
     on("global/shops",val=>{
       if(!val)return;
-      let arr;
-      if(typeof val==="object"&&!Array.isArray(val)){
-        arr=Object.values(val).filter(s=>s&&s.id);
-      } else {
-        arr=(Array.isArray(val)?val:Object.values(val)).filter(s=>s&&s.id);
-      }
+      const arr=typeof val==="object"&&!Array.isArray(val)
+        ?Object.values(val).filter(s=>s&&s.id)
+        :(Array.isArray(val)?val:Object.values(val)).filter(s=>s&&s.id);
       if(arr.length>0){ setShops(arr); ls("shift_shops_v6",arr); }
     });
-
-    // 店舗別データ
-    on(fbPath(effectiveSid,"settings"),val=>{
-      if(val&&typeof val==="object"){ setSettings(val); ls(storeKey(effectiveSid,"settings_v6"),val); }
-      else{ const def=makeSettings(sid); setSettings(def); }
+    // settings
+    on(fbPath(targetSid,"settings"),val=>{
+      if(val&&typeof val==="object"){ setSettings(val); ls(storeKey(targetSid,"settings_v6"),val); }
+      else{ setSettings(makeSettings(targetSid)); }
     });
-    on(fbPath(effectiveSid,"periods"),val=>{
-      if(!val){ return; }
-      let arr;
-      if(typeof val==="object"&&!Array.isArray(val)){
-        arr=Object.values(val).filter(p=>p&&p.id);
-      } else {
-        arr=(Array.isArray(val)?val:Object.values(val)).filter(p=>p&&p.id);
-      }
+    // periods
+    on(fbPath(targetSid,"periods"),val=>{
+      if(!val)return;
+      const arr=typeof val==="object"&&!Array.isArray(val)
+        ?Object.values(val).filter(p=>p&&p.id)
+        :(Array.isArray(val)?val:Object.values(val)).filter(p=>p&&p.id);
       if(arr.length>0){
-        arr.sort((a,b)=>new Date(b.createdAt||0)-new Date(a.createdAt||0));
-        setPeriods(arr); ls(storeKey(effectiveSid,"periods_v6"),arr);
+        arr.sort((a,b)=>new Date(b.startDate||0)-new Date(a.startDate||0));
+        setPeriods(arr); ls(storeKey(targetSid,"periods_v6"),arr);
       }
     });
-    on(fbPath(effectiveSid,"staff"),val=>{
+    // staff
+    on(fbPath(targetSid,"staff"),val=>{
       if(!val){ setStaffList([]); return; }
-      // staffは文字列配列
-      let arr;
-      if(Array.isArray(val)){
-        arr=val.filter(s=>s&&typeof s==="string");
-      } else if(typeof val==="object"){
-        // Firebaseが {0:"田中",1:"山田"} 形式で返した場合
-        arr=Object.values(val).filter(s=>s&&typeof s==="string");
-      } else {
-        arr=[];
-      }
-      setStaffList(arr); ls(storeKey(effectiveSid,"staff_v6"),arr);
+      const arr=Array.isArray(val)
+        ?val.filter(s=>s&&typeof s==="string")
+        :typeof val==="object"?Object.values(val).filter(s=>s&&typeof s==="string"):[];
+      setStaffList(arr); ls(storeKey(targetSid,"staff_v6"),arr);
     });
-    // subs購読前にリセット（前の店舗のデータをクリア）
+    // subs
     setSubs([]);
-    on(fbPath(effectiveSid,"subs"),val=>{
-      if(!val){ setSubs([]); ls(storeKey(effectiveSid,"subs_v6"),[]); return; }
-      let arr;
-      if(typeof val==="object"&&!Array.isArray(val)){
-        arr=Object.values(val).filter(s=>s&&s.id);
-      } else {
-        arr=(Array.isArray(val)?val:Object.values(val)).filter(s=>s&&s.id);
-      }
+    on(fbPath(targetSid,"subs"),val=>{
+      if(!val){ setSubs([]); ls(storeKey(targetSid,"subs_v6"),[]); return; }
+      const arr=typeof val==="object"&&!Array.isArray(val)
+        ?Object.values(val).filter(s=>s&&s.id)
+        :(Array.isArray(val)?val:Object.values(val)).filter(s=>s&&s.id);
       arr.sort((a,b)=>new Date(b.submittedAt)-new Date(a.submittedAt));
-      setSubs(arr);
-      ls(storeKey(effectiveSid,"subs_v6"),arr);
-      console.log("subs受信:", arr.length,"件 sid=",sid);
+      setSubs(arr); ls(storeKey(targetSid,"subs_v6"),arr);
+      console.log("subs受信:",arr.length,"件 sid=",targetSid);
     });
-
-    // settingsがFirebaseにない場合デフォルトを書き込む
-    firebaseDB.ref(fbPath(effectiveSid,"settings")).once("value").then(snap=>{
-      if(!snap.val()){ const def=makeSettings(sid); firebaseDB.ref(fbPath(effectiveSid,"settings")).set(def); }
+    // settingsデフォルト書き込み
+    firebaseDB.ref(fbPath(targetSid,"settings")).once("value").then(snap=>{
+      if(!snap.val()) firebaseDB.ref(fbPath(targetSid,"settings")).set(makeSettings(targetSid));
     });
-
-    return()=>{ console.log("Phase2: 購読解除 sid=",effectiveSid); refs.forEach(r=>r.off()); };
-  },[ready,sid]); // sidの変化でPhase2再実行（effectiveSidはref経由で最新値）
+  },[]);
 
   // URLにtokenが含まれるか（スタッフ専用モード・期間固定）
   const [urlLocked]=useState(()=>{ const p=parseUrl(); return !!(p&&p.token); });
@@ -1067,67 +1060,36 @@ function PeriodsTab({periods,subs,staffList,shops,onSave,tt,shopId,shopName}){
   const[eid,setEid]=useState(null);
   const[form,setForm]=useState({label:"",startDate:"",endDate:"",deadlineDate:""});
   const[show,setShow]=useState(false);
+  const[usePreset,setUsePreset]=useState(true); // プリセット使用フラグ
   const[viewPeriodId,setViewPeriodId]=useState(null);
 
-  // ===== プリセット生成（作成日から1ヶ月前は除外・1ヶ月後まで表示）=====
+  // プリセット生成（1ヶ月前除外、今月〜再来月）
   const genPresets=()=>{
-    const result=[];
-    const today=new Date();
-    // 今月・来月・再来月の前半・後半を生成（計6候補）
+    const result=[],today=new Date();
+    const cutoff=new Date(today.getFullYear(),today.getMonth()-1,today.getDate());
     for(let offset=0;offset<=2;offset++){
       const base=new Date(today.getFullYear(),today.getMonth()+offset,1);
-      const yr=base.getFullYear(),mo=base.getMonth()+1;
-      const ms=String(mo).padStart(2,"0");
+      const yr=base.getFullYear(),mo=base.getMonth()+1,ms=String(mo).padStart(2,"0");
       const lastDay=fd(new Date(yr,mo,0));
-      const firstHalf={label:`${yr}年${mo}月前半`,startDate:`${yr}-${ms}-01`,endDate:`${yr}-${ms}-15`};
-      const secondHalf={label:`${yr}年${mo}月後半`,startDate:`${yr}-${ms}-16`,endDate:lastDay};
-      // 1ヶ月前の期間は除外（endDateが今日より1ヶ月以上前なら除外）
-      const cutoff=new Date(today.getFullYear(),today.getMonth()-1,today.getDate());
-      if(pd(firstHalf.endDate)>=cutoff) result.push(firstHalf);
-      if(pd(secondHalf.endDate)>=cutoff) result.push(secondHalf);
+      const fh={label:`${yr}年${mo}月前半`,startDate:`${yr}-${ms}-01`,endDate:`${yr}-${ms}-15`};
+      const sh={label:`${yr}年${mo}月後半`,startDate:`${yr}-${ms}-16`,endDate:lastDay};
+      if(pd(fh.endDate)>=cutoff)result.push(fh);
+      if(pd(sh.endDate)>=cutoff)result.push(sh);
     }
     return result;
   };
   const pre=genPresets();
 
-  // ===== 1ヶ月後の対応期間を自動生成 =====
-  const makeNextMonth=(p)=>{
-    const s=pd(p.startDate),e=pd(p.endDate);
-    const isLatter=s.getDate()>=16;
-    // 1ヶ月後の同じ前半/後半
-    const ns=new Date(s.getFullYear(),s.getMonth()+1,s.getDate());
-    const ne=new Date(e.getFullYear(),e.getMonth()+1,1); // 翌月1日から
-    const nyr=ns.getFullYear(),nmo=ns.getMonth()+1,nms=String(nmo).padStart(2,"0");
-    const lastDayOfNextMonth=fd(new Date(nyr,nmo,0));
-    if(isLatter){
-      return{label:`${nyr}年${nmo}月後半`,startDate:`${nyr}-${nms}-16`,endDate:lastDayOfNextMonth};
-    } else {
-      return{label:`${nyr}年${nmo}月前半`,startDate:`${nyr}-${nms}-01`,endDate:`${nyr}-${nms}-15`};
-    }
-  };
-
   const create=()=>{
     if(!form.startDate||!form.endDate){tt("⚠️ 開始日・終了日を入力");return;}
-    const now=new Date().toISOString();
     const p={id:`p_${Date.now()}`,urlToken:genToken(),shopId,
       label:form.label||`${form.startDate.replace(/-/g,"/")}〜${form.endDate.replace(/-/g,"/")}`,
-      startDate:form.startDate,endDate:form.endDate,deadlineDate:form.deadlineDate,createdAt:now};
-
-    // 1ヶ月後の期間を自動生成
-    const next=makeNextMonth(p);
-    // すでに同じ期間が存在するか確認
-    const alreadyExists=periods.some(pp=>pp.startDate===next.startDate&&pp.endDate===next.endDate);
-    const nextP=alreadyExists?null:{
-      id:`p_${Date.now()+1}`,urlToken:genToken(),shopId,
-      label:next.label,startDate:next.startDate,endDate:next.endDate,
-      deadlineDate:"",createdAt:now
-    };
-
-    const newPeriods=nextP?[...periods,p,nextP]:[...periods,p];
-    onSave(newPeriods);
+      startDate:form.startDate,endDate:form.endDate,deadlineDate:form.deadlineDate,
+      createdAt:new Date().toISOString()};
+    onSave([...periods,p]);
     setForm({label:"",startDate:"",endDate:"",deadlineDate:""});
-    setShow(false);
-    tt(nextP?`✅ 期間を2つ作成しました（${p.label}・${nextP.label}）`:"✅ 期間を作成しました");
+    setShow(false);setUsePreset(true);
+    tt("✅ 期間を作成しました");
   };
 
   // 提出状況ビュー
@@ -1142,31 +1104,61 @@ function PeriodsTab({periods,subs,staffList,shops,onSave,tt,shopId,shopName}){
     );
   }
 
+  // 期間を開始日の降順でソート（最新が上）
+  const sortedPeriods=[...periods].sort((a,b)=>new Date(b.startDate)-new Date(a.startDate));
+
   return(
     <div>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
         <AT>📅 期間管理</AT>
-        <button onClick={()=>setShow(v=>!v)} style={{padding:"9px 16px",background:"#06C755",border:"none",borderRadius:9,color:"white",fontSize:13,fontWeight:700,cursor:"pointer"}}>＋ 新しい期間を作成</button>
+        <button onClick={()=>{setShow(v=>!v);setUsePreset(true);setForm({label:"",startDate:"",endDate:"",deadlineDate:""}); }} style={{padding:"9px 16px",background:"#06C755",border:"none",borderRadius:9,color:"white",fontSize:13,fontWeight:700,cursor:"pointer"}}>＋ 新しい期間を作成</button>
       </div>
       {show&&<AC title="📝 新しい期間を作成">
-        <AL>プリセット</AL>
-        <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:14}}>
-          {pre.map((p,i)=><button key={i} onClick={()=>setForm(f=>({...f,label:p.label,startDate:p.startDate,endDate:p.endDate}))} style={{padding:"6px 12px",background:"rgba(255,255,255,.07)",border:"1px solid rgba(255,255,255,.15)",borderRadius:7,color:"rgba(255,255,255,.85)",fontSize:12,fontWeight:600,cursor:"pointer"}}>{p.label}</button>)}
+        {/* プリセット使用 / 手動入力 の切り替え */}
+        <div style={{display:"flex",gap:8,marginBottom:16}}>
+          <button onClick={()=>setUsePreset(true)} style={{flex:1,padding:"9px 0",border:`2px solid ${usePreset?"#06C755":"rgba(255,255,255,.15)"}`,borderRadius:9,background:usePreset?"rgba(6,199,85,.15)":"rgba(255,255,255,.04)",color:usePreset?"#06C755":"rgba(255,255,255,.6)",fontSize:13,fontWeight:700,cursor:"pointer"}}>📋 プリセットから選ぶ</button>
+          <button onClick={()=>{setUsePreset(false);setForm({label:"",startDate:"",endDate:"",deadlineDate:""}); }} style={{flex:1,padding:"9px 0",border:`2px solid ${!usePreset?"#06C755":"rgba(255,255,255,.15)"}`,borderRadius:9,background:!usePreset?"rgba(6,199,85,.15)":"rgba(255,255,255,.04)",color:!usePreset?"#06C755":"rgba(255,255,255,.6)",fontSize:13,fontWeight:700,cursor:"pointer"}}>✏️ 手動で入力する</button>
         </div>
-        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:10,marginBottom:12}}>
-          <div><AL>ラベル</AL><input value={form.label} onChange={e=>setForm(f=>({...f,label:e.target.value}))} placeholder="例）7月前半" style={AI}/></div>
-          <div><AL>開始日 *</AL><input type="date" value={form.startDate} onChange={e=>setForm(f=>({...f,startDate:e.target.value}))} style={AI}/></div>
-          <div><AL>終了日 *</AL><input type="date" value={form.endDate} onChange={e=>setForm(f=>({...f,endDate:e.target.value}))} style={AI}/></div>
-          <div><AL>締切日</AL><input type="date" value={form.deadlineDate} onChange={e=>setForm(f=>({...f,deadlineDate:e.target.value}))} style={AI}/></div>
-        </div>
-        {form.startDate&&form.endDate&&form.startDate<=form.endDate&&<div style={{fontSize:12,color:"rgba(255,255,255,.35)",marginBottom:10}}>期間：{gd(form.startDate,form.endDate).length}日間</div>}
-        <div style={{display:"flex",gap:8}}>
-          <button onClick={create} style={AB}>✅ 作成する</button>
-          <button onClick={()=>setShow(false)} style={AGray}>キャンセル</button>
-        </div>
+
+        {usePreset?(
+          /* プリセット選択 */
+          <div>
+            <div style={{fontSize:12,color:"rgba(255,255,255,.4)",marginBottom:10}}>選択するとすぐに作成されます</div>
+            <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:14}}>
+              {pre.map((p,i)=>{
+                const alreadyExists=periods.some(pp=>pp.startDate===p.startDate&&pp.endDate===p.endDate);
+                return(
+                  <button key={i} onClick={()=>{
+                    if(alreadyExists){tt("⚠️ この期間はすでに作成済みです");return;}
+                    const np={id:`p_${Date.now()}`,urlToken:genToken(),shopId,label:p.label,startDate:p.startDate,endDate:p.endDate,deadlineDate:"",createdAt:new Date().toISOString()};
+                    onSave([...periods,np]);setShow(false);setUsePreset(true);tt(`✅ ${p.label} を作成しました`);
+                  }} style={{padding:"10px 16px",background:alreadyExists?"rgba(255,255,255,.03)":"rgba(255,255,255,.07)",border:`1px solid ${alreadyExists?"rgba(255,255,255,.08)":"rgba(255,255,255,.2)"}`,borderRadius:9,color:alreadyExists?"rgba(255,255,255,.25)":"rgba(255,255,255,.9)",fontSize:13,fontWeight:600,cursor:alreadyExists?"not-allowed":"pointer",textDecoration:alreadyExists?"line-through":"none"}}>
+                    {p.label}{alreadyExists&&<span style={{fontSize:10,marginLeft:4}}>作成済み</span>}
+                  </button>
+                );
+              })}
+            </div>
+            <button onClick={()=>setShow(false)} style={{...AGray,width:"100%"}}>キャンセル</button>
+          </div>
+        ):(
+          /* 手動入力 */
+          <div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:10,marginBottom:12}}>
+              <div><AL>ラベル</AL><input value={form.label} onChange={e=>setForm(f=>({...f,label:e.target.value}))} placeholder="例）7月前半" style={AI}/></div>
+              <div><AL>開始日 *</AL><input type="date" value={form.startDate} onChange={e=>setForm(f=>({...f,startDate:e.target.value}))} style={AI}/></div>
+              <div><AL>終了日 *</AL><input type="date" value={form.endDate} onChange={e=>setForm(f=>({...f,endDate:e.target.value}))} style={AI}/></div>
+              <div><AL>締切日</AL><input type="date" value={form.deadlineDate} onChange={e=>setForm(f=>({...f,deadlineDate:e.target.value}))} style={AI}/></div>
+            </div>
+            {form.startDate&&form.endDate&&form.startDate<=form.endDate&&<div style={{fontSize:12,color:"rgba(255,255,255,.35)",marginBottom:10}}>期間：{gd(form.startDate,form.endDate).length}日間</div>}
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={create} style={AB}>✅ 作成する</button>
+              <button onClick={()=>setShow(false)} style={AGray}>キャンセル</button>
+            </div>
+          </div>
+        )}
       </AC>}
 
-      {[...periods].reverse().map(p=>{
+      {sortedPeriods.map(p=>{
         const dates=gd(p.startDate,p.endDate),ip=idp(p.deadlineDate);
         const pUrl=buildUrl(shops,shopId,p);
         return(
