@@ -1017,19 +1017,66 @@ function PeriodsTab({periods,subs,staffList,shops,onSave,tt,shopId,shopName}){
   const[form,setForm]=useState({label:"",startDate:"",endDate:"",deadlineDate:""});
   const[show,setShow]=useState(false);
   const[viewPeriodId,setViewPeriodId]=useState(null);
-  const yr=td.getFullYear(),mo=td.getMonth()+1,ms=String(mo).padStart(2,"0");
-  const nm=new Date(td.getFullYear(),td.getMonth()+1,1),nyr=nm.getFullYear(),nms=String(nm.getMonth()+1).padStart(2,"0");
-  const lc=fd(new Date(yr,mo,0)),ln=fd(new Date(nyr,nm.getMonth()+1,0));
-  const pre=[
-    {label:`${yr}年${mo}月前半`,startDate:`${yr}-${ms}-01`,endDate:`${yr}-${ms}-15`},
-    {label:`${yr}年${mo}月後半`,startDate:`${yr}-${ms}-16`,endDate:lc},
-    {label:`${nyr}年${nm.getMonth()+1}月前半`,startDate:`${nyr}-${nms}-01`,endDate:`${nyr}-${nms}-15`},
-    {label:`${nyr}年${nm.getMonth()+1}月後半`,startDate:`${nyr}-${nms}-16`,endDate:ln},
-  ];
+
+  // ===== プリセット生成（作成日から1ヶ月前は除外・1ヶ月後まで表示）=====
+  const genPresets=()=>{
+    const result=[];
+    const today=new Date();
+    // 今月・来月・再来月の前半・後半を生成（計6候補）
+    for(let offset=0;offset<=2;offset++){
+      const base=new Date(today.getFullYear(),today.getMonth()+offset,1);
+      const yr=base.getFullYear(),mo=base.getMonth()+1;
+      const ms=String(mo).padStart(2,"0");
+      const lastDay=fd(new Date(yr,mo,0));
+      const firstHalf={label:`${yr}年${mo}月前半`,startDate:`${yr}-${ms}-01`,endDate:`${yr}-${ms}-15`};
+      const secondHalf={label:`${yr}年${mo}月後半`,startDate:`${yr}-${ms}-16`,endDate:lastDay};
+      // 1ヶ月前の期間は除外（endDateが今日より1ヶ月以上前なら除外）
+      const cutoff=new Date(today.getFullYear(),today.getMonth()-1,today.getDate());
+      if(pd(firstHalf.endDate)>=cutoff) result.push(firstHalf);
+      if(pd(secondHalf.endDate)>=cutoff) result.push(secondHalf);
+    }
+    return result;
+  };
+  const pre=genPresets();
+
+  // ===== 1ヶ月後の対応期間を自動生成 =====
+  const makeNextMonth=(p)=>{
+    const s=pd(p.startDate),e=pd(p.endDate);
+    const isLatter=s.getDate()>=16;
+    // 1ヶ月後の同じ前半/後半
+    const ns=new Date(s.getFullYear(),s.getMonth()+1,s.getDate());
+    const ne=new Date(e.getFullYear(),e.getMonth()+1,1); // 翌月1日から
+    const nyr=ns.getFullYear(),nmo=ns.getMonth()+1,nms=String(nmo).padStart(2,"0");
+    const lastDayOfNextMonth=fd(new Date(nyr,nmo,0));
+    if(isLatter){
+      return{label:`${nyr}年${nmo}月後半`,startDate:`${nyr}-${nms}-16`,endDate:lastDayOfNextMonth};
+    } else {
+      return{label:`${nyr}年${nmo}月前半`,startDate:`${nyr}-${nms}-01`,endDate:`${nyr}-${nms}-15`};
+    }
+  };
+
   const create=()=>{
     if(!form.startDate||!form.endDate){tt("⚠️ 開始日・終了日を入力");return;}
-    const p={id:`p_${Date.now()}`,urlToken:genToken(),shopId,label:form.label||`${form.startDate.replace(/-/g,"/")}〜${form.endDate.replace(/-/g,"/")}`,startDate:form.startDate,endDate:form.endDate,deadlineDate:form.deadlineDate,createdAt:new Date().toISOString()};
-    onSave([...periods,p]);setForm({label:"",startDate:"",endDate:"",deadlineDate:""});setShow(false);tt("✅ 期間を作成しました");
+    const now=new Date().toISOString();
+    const p={id:`p_${Date.now()}`,urlToken:genToken(),shopId,
+      label:form.label||`${form.startDate.replace(/-/g,"/")}〜${form.endDate.replace(/-/g,"/")}`,
+      startDate:form.startDate,endDate:form.endDate,deadlineDate:form.deadlineDate,createdAt:now};
+
+    // 1ヶ月後の期間を自動生成
+    const next=makeNextMonth(p);
+    // すでに同じ期間が存在するか確認
+    const alreadyExists=periods.some(pp=>pp.startDate===next.startDate&&pp.endDate===next.endDate);
+    const nextP=alreadyExists?null:{
+      id:`p_${Date.now()+1}`,urlToken:genToken(),shopId,
+      label:next.label,startDate:next.startDate,endDate:next.endDate,
+      deadlineDate:"",createdAt:now
+    };
+
+    const newPeriods=nextP?[...periods,p,nextP]:[...periods,p];
+    onSave(newPeriods);
+    setForm({label:"",startDate:"",endDate:"",deadlineDate:""});
+    setShow(false);
+    tt(nextP?`✅ 期間を2つ作成しました（${p.label}・${nextP.label}）`:"✅ 期間を作成しました");
   };
 
   // 提出状況ビュー
