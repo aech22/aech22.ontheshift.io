@@ -83,7 +83,27 @@ function fbOn(path, cb) {
 
 // ===== 定数 =====
 const WD=["日","月","火","水","木","金","土"];
-const JH=[1,6,7,8,11,15,16,23]; // 祝日月日（簡易・毎年共通）
+// 日本の祝日（固定祝日 + ハッピーマンデー + 年ごと変動）
+// 固定祝日: MMDD形式
+const JH_FIXED=new Set(["0101","0211","0223","0429","0503","0504","0505","0811","1103","1123"]);
+// 年別祝日（振替・ハッピーマンデー含む）: YYYYMMDD形式
+const JH_DATES=new Set([
+  // 2025
+  "20250101","20250113","20250211","20250223","20250320","20250429","20250503","20250504","20250505",
+  "20250721","20250811","20250915","20250923","20251013","20251103","20251123","20251124",
+  // 2026
+  "20260101","20260112","20260211","20260223","20260320","20260429","20260503","20260504","20260505",
+  "20260720","20260811","20260921","20260922","20260923","20261012","20261103","20261123",
+  // 2027
+  "20270101","20270111","20270211","20270223","20270321","20270322","20270429","20270503","20270504","20270505",
+  "20270719","20270811","20270920","20270923","20271011","20271103","20271123",
+]);
+function isHoliday(dateStr){
+  const d=pd(dateStr);
+  const yyyymmdd=`${d.getFullYear()}${String(d.getMonth()+1).padStart(2,"0")}${String(d.getDate()).padStart(2,"0")}`;
+  const mmdd=yyyymmdd.slice(4);
+  return JH_DATES.has(yyyymmdd)||JH_FIXED.has(mmdd);
+}
 const DEFAULT_PW="admin1234";
 
 // ===== デフォルト候補時間 =====
@@ -126,7 +146,7 @@ function sc(cs){return[...cs].sort((a,b)=>{const ta=Number(a.start.replace(":","
 // 時刻→数値（Excelフォーマット用）HH:MM → H.5 / H形式
 function timeToNum(t){if(!t)return"";const[h,m]=t.split(":").map(Number);return m===0?h:h+0.5;}
 // 祝日判定（簡易）
-function isHoliday(dateStr){const d=pd(dateStr);const mo=d.getMonth()+1,dy=d.getDate();return JH.some(h=>h===mo*100+dy)||false;}
+// isHoliday は上で定義済み
 function isWeekend(dateStr){const dow=pd(dateStr).getDay();return dow===0||dow===6||isHoliday(dateStr);}
 
 const td=new Date(),tds=fd(td);
@@ -348,6 +368,14 @@ function App(){
     currentShopIdRef.current=sid;
     if(!_hasUrlToken) ssSave(SS_SHOP,sid);
   },[sid]);
+
+  // 共有テンプレート（全店舗共通: global/templates）
+  const[globalTemplates,setGlobalTemplates]=useState(()=>lg("shift_global_templates",[]));
+  const saveGlobalTemplates=useCallback(v=>{
+    setGlobalTemplates(v);
+    ls("shift_global_templates",v);
+    if(firebaseDB) firebaseDB.ref("global/templates").set(v).catch(e=>console.warn("templates保存失敗:",e));
+  },[]);
   useEffect(()=>{ if(!_hasUrlToken) ssSave(SS_APID,apid); },[apid]);
   useEffect(()=>{ if(!_hasUrlToken) ssSave(SS_VIEW,view); },[view]);
 
@@ -365,6 +393,14 @@ function App(){
       refs.push(r);
     };
     console.log("購読開始 targetSid=",targetSid);
+
+    // global/templates（全店舗共通）
+    on("global/templates",val=>{
+      if(!val)return;
+      const arr=Array.isArray(val)?val.filter(Boolean):Object.values(val);
+      setGlobalTemplates(arr);
+      ls("shift_global_templates",arr);
+    });
 
     // global/shops
     on("global/shops",val=>{
@@ -539,6 +575,7 @@ function App(){
           ?<AdminView settings={effectiveSettings} periods={periods} subs={subs} staffList={staffList} shops={shops}
               currentShopId={sid} saveSettings={saveSettings} savePeriods={savePeriods} saveSubs={saveSubs}
               saveStaff={saveStaff} saveShops={saveShops}
+              globalTemplates={globalTemplates} saveGlobalTemplates={saveGlobalTemplates}
               setCurrentShopId={id=>{
                 currentShopIdRef.current=id;
                 setCurrentShopId(id);
@@ -1011,7 +1048,7 @@ function AdminLogin({settings,onAuth}){
 // ============================================================
 // 管理者画面
 // ============================================================
-function AdminView({settings,periods,subs,staffList,shops,currentShopId,saveSettings,savePeriods,saveSubs,saveStaff,saveShops,setCurrentShopId,startSubscriptions,logout,syncStatus}){
+function AdminView({settings,periods,subs,staffList,shops,currentShopId,saveSettings,savePeriods,saveSubs,saveStaff,saveShops,setCurrentShopId,startSubscriptions,globalTemplates,saveGlobalTemplates,logout,syncStatus}){
   const[tab,setTab]=useState(()=>ssGet(SS_TAB,"periods"));
   useEffect(()=>ssSave(SS_TAB,tab),[tab]);
   const[toast,setToast]=useState(null);
@@ -1074,7 +1111,7 @@ function AdminView({settings,periods,subs,staffList,shops,currentShopId,saveSett
       <div style={{maxWidth:900,margin:"0 auto",padding:"20px 14px 60px"}}>
         {tab==="periods"&&<PeriodsTab periods={periods} subs={subs} staffList={staffList} shops={shops} onSave={savePeriods} tt={tt} shopId={currentShopId} shopName={(shops.find(s=>s.id===currentShopId)||shops[0])?.name}/>}
         {tab==="staff"&&<StaffTab staffList={staffList} onSave={saveStaff} tt={tt}/>}
-        {tab==="candidates"&&<CandTab settings={settings} onSave={saveSettings} tt={tt}/>}
+        {tab==="candidates"&&<CandTab settings={settings} onSave={saveSettings} globalTemplates={globalTemplates} saveGlobalTemplates={saveGlobalTemplates} tt={tt}/>}
         {tab==="submissions"&&<SubsTab subs={subs} periods={periods} staffList={staffList} onSave={saveSubs} tt={tt}/>}
         {tab==="settings"&&<SetTab settings={settings} onSave={saveSettings} subs={subs} saveSubs={saveSubs} tt={tt} syncStatus={syncStatus}/>}
       </div>
@@ -1458,7 +1495,7 @@ function StaffTab({staffList,onSave,tt}){
 }
 
 // ===== 候補管理タブ（複数選択対応）=====
-function CandTab({settings,onSave,tt}){
+function CandTab({settings,onSave,globalTemplates=[],saveGlobalTemplates,tt}){
   const[mode,setMode]=useState("global");
   const[selDows,setSelDows]=useState([1]);
   const[selDates,setSelDates]=useState([tds]);
@@ -1518,14 +1555,14 @@ function CandTab({settings,onSave,tt}){
     if(!tmplName.trim()){tt("⚠️ テンプレート名を入力");return;}
     const wdCopy={...(settings.weekdayCandidates||{})};
     const tmpl={name:tmplName.trim(),weekdayCandidates:wdCopy,savedAt:new Date().toISOString()};
-    const ts=[...(settings.templates||[]),tmpl];
-    onSave({...settings,templates:ts});setTmplName("");tt(`✅ テンプレート「${tmplName.trim()}」を保存しました`);
+    const ts=[...globalTemplates,tmpl];
+    saveGlobalTemplates(ts);setTmplName("");tt(`✅ テンプレート「${tmplName.trim()}」を保存しました（全店舗共有）`);
   };
   const applyTemplate=t=>{
     if(!confirm(`テンプレート「${t.name}」を適用しますか？現在の曜日別候補が上書きされます。`))return;
     onSave({...settings,weekdayCandidates:t.weekdayCandidates});tt(`✅ テンプレート「${t.name}」を適用しました`);
   };
-  const delTemplate=i=>{const ts=[...(settings.templates||[])];ts.splice(i,1);onSave({...settings,templates:ts});tt("🗑️ 削除しました");};
+  const delTemplate=i=>{const ts=[...globalTemplates];ts.splice(i,1);saveGlobalTemplates(ts);tt("🗑️ 削除しました");};
 
   // 選択中の曜日の候補（複数選択時は全曜日の和集合）
   const wC=selDows.length===1?((settings.weekdayCandidates||{})[selDows[0]]||[]):[];// key=7は祝日候補
@@ -1629,8 +1666,9 @@ function CandTab({settings,onSave,tt}){
           <input value={tmplName} onChange={e=>setTmplName(e.target.value)} placeholder="テンプレート名を入力" style={{...AI,flex:1}}/>
           <button onClick={saveTemplate} style={AB}>保存</button>
         </div>
-        {(settings.templates||[]).length===0&&<div style={{fontSize:13,color:"rgba(255,255,255,.3)"}}>保存済みテンプレートはありません</div>}
-        {(settings.templates||[]).map((t,i)=>(
+        <div style={{fontSize:12,color:"rgba(255,255,255,.4)",marginBottom:8}}>🌐 全店舗で共有されます</div>
+        {globalTemplates.length===0&&<div style={{fontSize:13,color:"rgba(255,255,255,.3)"}}>保存済みテンプレートはありません</div>}
+        {globalTemplates.map((t,i)=>(
           <div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.08)",borderRadius:10,marginBottom:6}}>
             <span style={{flex:1,fontSize:14,color:"white",fontWeight:600}}>{t.name}</span>
             <button onClick={()=>applyTemplate(t)} style={{...AB,padding:"6px 12px",fontSize:12}}>適用</button>
