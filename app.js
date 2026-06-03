@@ -232,26 +232,62 @@ function App(){
       const val=snap.val();
       let sh;
       if(val){
-        // Firebaseにデータあり → そのまま使う（端末間でIDを統一）
         if(typeof val==="object"&&!Array.isArray(val)){
           sh=Object.values(val).filter(s=>s&&s.id);
         } else {
           sh=(Array.isArray(val)?val:Object.values(val)).filter(s=>s&&s.id);
         }
-        console.log("Firebase shops取得:", sh.length,"件");
       } else {
-        // Firebaseにデータなし → localまたは新規作成してFirebaseに書く
         const local=lg("shift_shops_v6",null);
         sh=local&&local.length>0?local:[makeShop("メイン店舗")];
         const shObj={};
         sh.forEach(s=>{ if(s&&s.id) shObj[s.id]=s; });
         firebaseDB.ref("global/shops").set(shObj);
-        console.log("Firebase shops新規作成:", sh.length,"件");
       }
       setShops(sh);
       ls("shift_shops_v6",sh);
-      setCurrentShopId(sh[0].id);
-      setReady(true);
+
+      // URLにtokenがある場合: 全店舗のperiodsを横断検索してshopを特定
+      const parsed=parseUrl();
+      if(parsed&&parsed.token){
+        const token=parsed.token;
+        Promise.all(
+          sh.map(shop=>
+            firebaseDB.ref(fbPath(shop.id,"periods")).once("value")
+              .then(s=>{
+                const v=s.val();
+                if(!v)return{shop,periods:[]};
+                const arr=typeof v==="object"&&!Array.isArray(v)
+                  ?Object.values(v).filter(Boolean)
+                  :Array.isArray(v)?v.filter(Boolean):[];
+                return{shop,periods:arr};
+              }).catch(()=>({shop,periods:[]}))
+          )
+        ).then(results=>{
+          let matched=null;
+          for(const {shop,periods:ps} of results){
+            const found=ps.find(p=>p.urlToken===token||p.id===token);
+            if(found){matched={shop,period:found};break;}
+          }
+          if(matched){
+            console.log("URL解決(Phase1): shop=",matched.shop.name,"period=",matched.period.label);
+            setCurrentShopId(matched.shop.id);   // 正しい店舗をセット
+            setApid(matched.period.id);           // 正しい期間をセット
+            setUrlResolved(true);                 // Phase3不要
+          } else {
+            console.warn("token一致なし(Phase1):", token);
+            setCurrentShopId(sh[0].id);
+          }
+          setReady(true);
+        }).catch(()=>{
+          setCurrentShopId(sh[0].id);
+          setReady(true);
+        });
+      } else {
+        // URLなし: 通常通りshops[0]を使用
+        setCurrentShopId(sh[0].id);
+        setReady(true);
+      }
     }).catch(e=>{
       console.warn("shops読み込み失敗:",e);
       const local=lg("shift_shops_v6",null)||[makeShop("メイン店舗")];
@@ -349,42 +385,17 @@ function App(){
   const [urlLocked]=useState(()=>{ const p=parseUrl(); return !!(p&&p.token); });
 
   // ===================================================================
-  // Phase3: periods確定後にURL解決・apid初期化
+  // Phase3: URLなし時のapid初期化のみ担当
+  // (URLあり時はPhase1で解決済み)
   // ===================================================================
   useEffect(()=>{
     if(!ready||urlResolved)return;
-    const parsed=parseUrl();
-
-    // URLなし → 通常モード（管理者画面も使える）
-    if(!parsed){
-      if(periods.length>0) setApid(periods[0].id);
-      setUrlResolved(true);
-      return;
+    // URLなし → 通常モード: periodsの最初をapidに設定
+    if(periods.length>0){
+      setApid(periods[0].id);
     }
-
-    // token方式ではshopIdx不要（resolvePeriodFromUrlが店舗を自動解決）
-
-    // tokenでperiod解決（periodsが届くまで待機）
-    if(parsed.token){
-      if(periods.length===0)return; // まだperiods未着 → 待機
-      const r=resolvePeriodFromUrl(shops,periods);
-      if(r){
-        setApid(r.period.id);
-        if(r.shopId&&r.shopId!==sid)setCurrentShopId(r.shopId);
-        setView("staff");
-        setUrlResolved(true);
-        return;
-      }
-      console.warn("token一致なし:", parsed.token);
-      if(periods.length>0) setApid(periods[0].id);
-      setView("staff");
-      setUrlResolved(true);
-      return;
-    }
-
-    if(periods.length>0) setApid(periods[0].id);
     setUrlResolved(true);
-  },[ready,shops,periods,urlResolved,sid]); // apidを依存から外す（変化で再実行しない）
+  },[ready,periods,urlResolved]);
 
   // periodsが来たらapidを設定（URLで指定済みの場合は上書きしない）
   useEffect(()=>{
