@@ -598,11 +598,13 @@ function App(){
       const sh=typeof val==="object"&&!Array.isArray(val)?Object.values(val):val;
       const found=Array.isArray(sh)?sh.find(s=>s&&s.id===code):null;
       if(found){
+        const allSh=Array.isArray(sh)?sh.filter(s=>s&&s.id):[];
         setCookie(CK_SHOP,code,365);
-        setShops(Array.isArray(sh)?sh:[]);
+        setShops(allSh);
+        ls("shift_shops_v6",allSh);
         currentShopIdRef.current=code;
         setCurrentShopId(code);
-        startSubscriptions(code,Array.isArray(sh)?sh:[]);
+        startSubscriptions(code,allSh);
         setUnbound(false);
         setInviteError("");
         setInviteCode("");
@@ -636,24 +638,33 @@ function App(){
         </button>
         <div style={{textAlign:"center"}}>
           <button onClick={()=>{
-            // 新規店舗として登録（初回セットアップ）
             if(!firebaseDB){setInviteError("Firebase未接続");return;}
-            const newShop=makeShop("新しい店舗");
+            setInviteError("確認中...");
             firebaseDB.ref("global/shops").once("value").then(snap=>{
               const val=snap.val();
-              const sh=val?(typeof val==="object"&&!Array.isArray(val)?Object.values(val):val):[];
-              const newShops=[...(Array.isArray(sh)?sh:[]),newShop];
-              const obj={};newShops.forEach(s=>{if(s&&s.id)obj[s.id]=s;});
+              const sh=val?(typeof val==="object"&&!Array.isArray(val)
+                ?Object.values(val).filter(s=>s&&s.id)
+                :(Array.isArray(val)?val:Object.values(val)).filter(s=>s&&s.id)):[];
+              if(sh.length>0){
+                // 既存shopがある → 追加せず最初の1件を使う
+                setInviteError("⚠️ 既に店舗が登録されています。引き継ぎコードを入力してください。");
+                setShops(sh);
+                return;
+              }
+              // 店舗が1件もない場合のみ新規作成
+              const newShop=makeShop("メイン店舗");
+              const obj={[newShop.id]:newShop};
               firebaseDB.ref("global/shops").set(obj);
               setCookie(CK_SHOP,newShop.id,365);
-              setShops(newShops);
+              setShops([newShop]);
               currentShopIdRef.current=newShop.id;
               setCurrentShopId(newShop.id);
-              startSubscriptions(newShop.id,newShops);
+              startSubscriptions(newShop.id,[newShop]);
               setUnbound(false);
-            });
+              setInviteError("");
+            }).catch(()=>setInviteError("エラーが発生しました。再試行してください。"));
           }} style={{background:"none",border:"none",color:"rgba(255,255,255,.4)",fontSize:13,cursor:"pointer",textDecoration:"underline"}}>
-            初めて使う（新規店舗を作成）
+            初めて使う（店舗を新規登録）
           </button>
         </div>
       </div>
