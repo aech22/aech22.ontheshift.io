@@ -2027,37 +2027,7 @@ function SetTab({settings,onSave,subs,saveSubs,tt,syncStatus}){
         }} style={AB}>適用</button>
       </div>
     </AC>
-    <AC title="🔴 リアルタイム同期（Firebase）">
-      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14,padding:"12px 14px",background:"rgba(255,255,255,.05)",borderRadius:10}}>
-        <div style={{width:10,height:10,borderRadius:"50%",background:syncStatus==="online"?"#06C755":syncStatus==="offline"?"#F59E0B":"#6B7280",flexShrink:0}}/>
-        <div>
-          <div style={{fontSize:13,fontWeight:700,color:"white"}}>
-            {syncStatus==="online"?"接続中 — リアルタイム同期中":syncStatus==="offline"?"オフライン — ローカル保存中":"Firebase未設定 — ローカル保存中"}
-          </div>
-          <div style={{fontSize:11,color:"rgba(255,255,255,.4)",marginTop:2}}>
-            {syncStatus==="no_config"?"app.js の FIREBASE_CONFIG に設定を貼り付けてください":"全端末の変更が即座に反映されます"}
-          </div>
-        </div>
-      </div>
-      {syncStatus==="no_config"&&<div style={{fontSize:12,color:"rgba(255,255,255,.5)",lineHeight:1.8,padding:"10px 14px",background:"rgba(255,255,255,.04)",borderRadius:8}}>
-        <strong style={{color:"white"}}>設定手順：</strong><br/>
-        1. <a href="https://console.firebase.google.com" target="_blank" style={{color:"#60A5FA"}}>Firebase Console</a> でプロジェクトを作成<br/>
-        2. 「Realtime Database」を作成（テストモードで開始）<br/>
-        3. プロジェクト設定 → マイアプリ → SDK設定からconfigをコピー<br/>
-        4. app.js の FIREBASE_CONFIG に貼り付けて保存
-      </div>}
-    </AC>
 
-    <AC title="📤 データ統合（別端末との同期）">
-      <div style={{fontSize:13,color:"rgba(255,255,255,.5)",marginBottom:14,lineHeight:1.7}}>
-        別の端末（スマホ・PC）で提出されたデータを統合するには：<br/>
-        ①この端末でエクスポート → ②相手端末でインポート、またはその逆を行ってください。
-      </div>
-      <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-        <button onClick={exportData} style={{...AB,background:"#3B82F6"}}>📥 提出データをエクスポート（JSON）</button>
-        <button onClick={importData} style={{...AB,background:"#8B5CF6"}}>📤 JSONからインポート（マージ）</button>
-      </div>
-    </AC>
   </div>);
 }
 
