@@ -1348,7 +1348,7 @@ function expXl(p,subs,staffList,tt,shopName){
   const SC=(r,c,val,al,fill,border,font)=>{
     const cell=ws.getRow(r).getCell(c);
     cell.value=(val===null||val===undefined||val==="")? null:val;
-    cell.alignment=al||aH;
+    cell.alignment=al||aV; // デフォルト縦書き
     cell.fill=fill||fNone;
     cell.border=border||{};
     cell.font={name:"Yu Gothic",size:10,...(font||{})}; // デフォルト Yu Gothic
