@@ -1288,141 +1288,141 @@ function expXl(p,subs,staffList,tt,shopName){
   const isLatter=firstDate.getDate()>=16||(p.label&&p.label.includes("後半"));
   const periodLabel=`${mo}月${isLatter?"後半":"前半"}`;
 
-  // 列インデックス（1-based, A1から開始）
-  // A=店舗名(1), B=期間(2), C=日付(3), D=曜日(4), E=空(5), F〜=スタッフ(6〜)
-  const C_SHOP=1, C_PER=2, C_DATE=3, C_WD=4;
-  const C_STAFF=5; // C列からスタッフ開始（空列なし）
-  const C_WD_R=C_STAFF+sl.length;
-  const C_DATE_R=C_STAFF+sl.length+1;
-  const TOTAL_COLS=C_DATE_R;
+  // ============================================================
+  // サンプルファイル完全準拠レイアウト
+  //
+  // ヘッダー行(Row1 = サンプルのRow2):
+  //   A1 = 期間ラベル (縦書き, medium四辺)
+  //   B1 = 曜日ヘッダー (縦書き, medium四辺)
+  //   C1〜C+sl-1 = スタッフ名 (縦書き, top:medium, right:thin)
+  //   C+sl = 曜日 (縦書き, medium四辺 ← 右端ミラー)
+  //   C+sl+1 = 店舗名 (縦書き, top/bot:medium, left/right:thin)
+  //
+  // データ行(1日=2行):
+  //   上行: A=日付(横書き), B=曜日(横書き) → 両方 medium四辺・上下結合
+  //         スタッフ列 → top:medium, bot:hair, left:thin, right:thin
+  //         右端A=曜日(横書き, medium四辺・上下結合)
+  //         右端B=日付(横書き, medium四辺・上下結合)
+  //   下行: A/B結合(bot:medium), スタッフ → top:hair, bot:thin
+  //         右端結合(bot:medium)
+  //   最終日の下行: スタッフ → bot:medium
+  //
+  // 塗り: 土日祝は A〜右端B 全列に塗り, 平日は塗りなし
+  // ============================================================
+
+  const R=h=>"FF"+h;
+  // 列定義
+  const C_PER=1;             // A: 期間
+  const C_WD_H=2;            // B: 曜日ヘッダー
+  const C_STAFF=3;           // C〜: スタッフ
+  const C_WD_R=3+sl.length;  // 右端曜日
+  const C_SHOP_R=4+sl.length;// 右端店舗名
+  const TOTAL_COLS=C_SHOP_R;
   const TOTAL_ROWS=1+dates.length*2;
 
-  // 色（ARGBはFF+HEX）
-  const RGB=h=>"FF"+h;
-  const COL_HDR=RGB("F0F0F0");
-  const COL_SAT=RGB("DDEEFF");   // 土曜
-  const COL_HOL=RGB("FFEEEE");   // 日祝
-  const COL_WEE=RGB("FFFFFF");   // 平日（白=塗りなし）
-
   // 枠線
-  const T ={style:"thin",  color:{argb:RGB("AAAAAA")}};
-  const K ={style:"medium",color:{argb:RGB("555555")}};
-  const H ={style:"hair",  color:{argb:RGB("CCCCCC")}};
-  const bAll={top:T,bottom:T,left:T,right:T};
-  const bTop={top:T,bottom:H,left:T,right:T}; // 出勤上行（下に点線）
-  const bBot={top:H,bottom:T,left:T,right:T}; // 退勤下行（上に点線）
+  const M={style:"medium",color:{argb:R("555555")}};
+  const T={style:"thin",  color:{argb:R("AAAAAA")}};
+  const H={style:"hair",  color:{argb:R("CCCCCC")}};
 
   // 配置
-  const aV={horizontal:"center",vertical:"middle",textRotation:255,wrapText:true}; // 縦書き
-  const aH={horizontal:"center",vertical:"middle"}; // 横書き
+  const aV={horizontal:"center",vertical:"middle",textRotation:255,wrapText:true};
+  const aH={horizontal:"center",vertical:"middle"};
+
+  // 塗り
+  const fSat ={type:"pattern",pattern:"solid",fgColor:{argb:R("DDEEFF")},bgColor:{argb:"FFFFFFFF"}};
+  const fHol ={type:"pattern",pattern:"solid",fgColor:{argb:R("FFEEEE")},bgColor:{argb:"FFFFFFFF"}};
+  const fNone={type:"pattern",pattern:"none"};
 
   const wb=new ExcelJS.Workbook();
   wb.creator="ShiftApp";
   const ws=wb.addWorksheet("シフト一覧",{pageSetup:{orientation:"landscape"}});
 
   // 列幅
-  ws.getColumn(C_SHOP).width=6;   // A: 店舗名
-  ws.getColumn(C_PER).width=5;    // B: 期間
-  ws.getColumn(C_DATE).width=5;   // C: 日付
-  ws.getColumn(C_WD).width=5;     // D: 曜日
-  sl.forEach((_,i)=>ws.getColumn(C_STAFF+i).width=6); // E〜: スタッフ
-  ws.getColumn(C_WD_R).width=5;   // 右曜日
-  ws.getColumn(C_DATE_R).width=5; // 右日付
+  ws.getColumn(C_PER).width=5;
+  ws.getColumn(C_WD_H).width=5;
+  sl.forEach((_,i)=>ws.getColumn(C_STAFF+i).width=6);
+  ws.getColumn(C_WD_R).width=5;
+  ws.getColumn(C_SHOP_R).width=6;
 
-  // セル設定ヘルパー
-  const SC=(r,c,val,al,fillRgb,border,font)=>{
+  const SC=(r,c,val,al,fill,border,font)=>{
     const cell=ws.getRow(r).getCell(c);
     cell.value=(val===null||val===undefined||val==="")? null:val;
     cell.alignment=al||aH;
-    cell.fill={type:"pattern",pattern:"solid",
-      fgColor:{argb:fillRgb||COL_WEE},bgColor:{argb:"FFFFFFFF"}};
-    cell.border=border||bAll;
+    cell.fill=fill||fNone;
+    cell.border=border||{};
     cell.font={name:"Yu Gothic",size:10,...(font||{})};
   };
 
-  // ===== 行1: ヘッダー（全縦書き・高さ120）=====
+  // ===== Row1: ヘッダー (高さ120, 全縦書き) =====
   ws.getRow(1).height=120;
-  SC(1,C_SHOP, shopName||"", aV, COL_HDR, bAll, {bold:true,size:11});
-  SC(1,C_PER,  periodLabel,  aV, COL_HDR, bAll, {bold:true,size:11});
-  SC(1,C_DATE, "",           aV, COL_HDR, bAll, {bold:true,size:11});
-  SC(1,C_WD,   "曜日",       aV, COL_HDR, bAll, {bold:true,size:11});
-  sl.forEach((nm,i)=>SC(1,C_STAFF+i, nm, aV, COL_HDR, bAll, {bold:true,size:10}));
-  SC(1,C_WD_R,   "曜日",     aV, COL_HDR, bAll, {bold:true,size:11});
-  SC(1,C_DATE_R, "",         aV, COL_HDR, bAll, {bold:true,size:11});
 
-  // ===== データ行（1日=2行）=====
-  const merges=[];
+  // A1: 期間ラベル (top/bot/left:medium, right:thin)
+  SC(1,C_PER,periodLabel,aV,fNone,{top:M,bottom:M,left:M,right:T},{bold:true,size:11});
+  // B1: 曜日ヘッダー (top/bot/right:medium, left:thin)
+  SC(1,C_WD_H,"曜日",aV,fNone,{top:M,bottom:M,left:T,right:M},{bold:true,size:11});
+  // スタッフ列: top:medium, right:thin（左枠なし）
+  sl.forEach((nm,i)=>{
+    const isFirst=i===0;
+    SC(1,C_STAFF+i,nm,aV,fNone,
+      {top:M,bottom:M,left:isFirst?T:undefined,right:T},
+      {bold:true,size:10});
+  });
+  // 右端曜日: top/bot/left:medium, right:thin
+  SC(1,C_WD_R,"曜日",aV,fNone,{top:M,bottom:M,left:M,right:T},{bold:true,size:11});
+  // 右端店舗名: top/bot:medium, left/right:thin
+  SC(1,C_SHOP_R,shopName||"",aV,fNone,{top:M,bottom:M,left:T,right:T},{bold:true,size:11});
+
+  // ===== データ行 (1日=2行) =====
   dates.forEach((ds,di)=>{
     const d=pd(ds),dow=d.getDay(),day=d.getDate(),wd=WD[dow];
-    const isSat=dow===6, isSunHol=dow===0||isHoliday(ds);
-    // 土日祝のみ塗りつぶし、平日は白
-    const bg=isSat?COL_SAT:isSunHol?COL_HOL:COL_WEE;
-    const wdColor=isSat?RGB("3B82F6"):isSunHol?RGB("FF4757"):RGB("000000");
+    const isSat=dow===6,isSunHol=dow===0||isHoliday(ds);
+    const fill=isSat?fSat:isSunHol?fHol:fNone;
+    const isLast=di===dates.length-1;
     const rT=2+di*2, rB=rT+1;
     ws.getRow(rT).height=18;
     ws.getRow(rB).height=18;
 
-    // === 太枠パターン（サンプルファイル準拠）===
-    // 各日付ブロック（C〜D列）を太枠で囲む
-    const isFirstDay=di===0, isLastDay=di===dates.length-1;
-    const outerTop=isFirstDay?K:T, outerBot=isLastDay?K:T;
+    // A列: 日付 (medium四辺, 上下結合, 横書き)
+    SC(rT,C_PER,day,aH,fill,{top:M,bottom:M,left:M,right:M},{bold:true,size:11});
+    SC(rB,C_PER,null,aH,fill,{top:M,bottom:M,left:M,right:M});
+    ws.mergeCells(rT,C_PER,rB,C_PER);
 
-    // A列(店舗名)・B列(期間): 縦方向に結合しないが塗り
-    SC(rT,C_SHOP,"",aH,COL_HDR,{top:T,bottom:T,left:K,right:T});
-    SC(rB,C_SHOP,"",aH,COL_HDR,{top:T,bottom:T,left:K,right:T});
-    SC(rT,C_PER,"",aH,COL_HDR,{top:T,bottom:T,left:T,right:T});
-    SC(rB,C_PER,"",aH,COL_HDR,{top:T,bottom:T,left:T,right:T});
-
-    // C列: 日付（横書き・上下結合・太枠）
-    const bDateT={top:outerTop,bottom:H,left:K,right:K};
-    const bDateB={top:H,bottom:outerBot,left:K,right:K};
-    SC(rT,C_DATE,day,aH,bg,bDateT,{bold:true,size:11});
-    SC(rB,C_DATE,null,aH,bg,bDateB);
-    merges.push({s:{r:rT,c:C_DATE},e:{r:rB,c:C_DATE}});
-
-    // D列: 曜日（縦書き・上下結合・太枠）
-    const bWdT={top:outerTop,bottom:H,left:K,right:K};
-    const bWdB={top:H,bottom:outerBot,left:K,right:K};
-    SC(rT,C_WD,wd,aV,bg,bWdT,{bold:true,size:11,color:{argb:wdColor}});
-    SC(rB,C_WD,null,aH,bg,bWdB);
-    merges.push({s:{r:rT,c:C_WD},e:{r:rB,c:C_WD}});
+    // B列: 曜日 (medium四辺, 上下結合, 横書き)
+    SC(rT,C_WD_H,wd,aH,fill,{top:M,bottom:M,left:M,right:M},{bold:true,size:11});
+    SC(rB,C_WD_H,null,aH,fill,{top:M,bottom:M,left:M,right:M});
+    ws.mergeCells(rT,C_WD_H,rB,C_WD_H);
 
     // スタッフ列
     sl.forEach((nm,si)=>{
       const sub=ss.find(s=>s.staffName===nm),sh=sub?.shifts?.[ds];
       const isWork=sh&&sh.status==="work";
       const ci=C_STAFF+si;
-      const isLast=si===sl.length-1;
-      const rBorder=isLast?K:T;
+      const isLastStaff=si===sl.length-1;
+      // 上行: top:medium, bot:hair
+      // 下行: top:hair, bot:thin (最終日はbot:medium)
+      const botT=isLast?M:T;
       if(isWork){
-        const sv=sh.start?timeToNum(sh.start):null;
-        const ev=sh.end?timeToNum(sh.end):null;
-        SC(rT,ci,sv,aH,bg,{top:outerTop,bottom:H,left:T,right:rBorder},{size:10});
-        SC(rB,ci,ev,aH,bg,{top:H,bottom:outerBot,left:T,right:rBorder},{size:10});
+        SC(rT,ci,sh.start?timeToNum(sh.start):null,aH,fill,{top:M,bottom:H,left:T,right:T},{size:10});
+        SC(rB,ci,sh.end?timeToNum(sh.end):null,aH,fill,{top:H,bottom:botT,left:T,right:T},{size:10});
       } else {
-        // 休み: 斜線（右上→左下の1本）・土日祝のみ塗りつぶし
-        const diagB={...{top:outerTop,bottom:H,left:T,right:rBorder},
-          diagonal:{up:false,down:true,style:"thin",color:{argb:RGB("AAAAAA")}}};
-        const diagB2={...{top:H,bottom:outerBot,left:T,right:rBorder},
-          diagonal:{up:false,down:true,style:"thin",color:{argb:RGB("AAAAAA")}}};
-        SC(rT,ci,null,aH,bg,diagB);
-        SC(rB,ci,null,aH,bg,diagB2);
+        // 休み: 斜線（右上→左下）
+        const diagU={up:false,down:true,style:"thin",color:{argb:R("AAAAAA")}};
+        SC(rT,ci,null,aH,fill,{top:M,bottom:H,left:T,right:T,diagonal:diagU});
+        SC(rB,ci,null,aH,fill,{top:H,bottom:botT,left:T,right:T,diagonal:diagU});
       }
     });
 
-    // 右端: 曜日（縦書き・結合・太枠）
-    SC(rT,C_WD_R,wd,aV,bg,{top:outerTop,bottom:H,left:K,right:K},{bold:true,size:11,color:{argb:wdColor}});
-    SC(rB,C_WD_R,null,aH,bg,{top:H,bottom:outerBot,left:K,right:K});
-    merges.push({s:{r:rT,c:C_WD_R},e:{r:rB,c:C_WD_R}});
+    // 右端曜日: medium四辺, 上下結合
+    SC(rT,C_WD_R,wd,aH,fill,{top:M,bottom:M,left:M,right:M},{bold:true,size:11});
+    SC(rB,C_WD_R,null,aH,fill,{top:M,bottom:M,left:M,right:M});
+    ws.mergeCells(rT,C_WD_R,rB,C_WD_R);
 
-    // 右端: 日付（横書き・結合・太枠）
-    SC(rT,C_DATE_R,day,aH,bg,{top:outerTop,bottom:H,left:K,right:K},{bold:true,size:11});
-    SC(rB,C_DATE_R,null,aH,bg,{top:H,bottom:outerBot,left:K,right:K});
-    merges.push({s:{r:rT,c:C_DATE_R},e:{r:rB,c:C_DATE_R}});
+    // 右端日付: medium四辺, 上下結合
+    SC(rT,C_SHOP_R,day,aH,fill,{top:M,bottom:M,left:M,right:M},{bold:true,size:11});
+    SC(rB,C_SHOP_R,null,aH,fill,{top:M,bottom:M,left:M,right:M});
+    ws.mergeCells(rT,C_SHOP_R,rB,C_SHOP_R);
   });
-
-  ws.addMerges=merges; // 後で適用
-  merges.forEach(m=>ws.mergeCells(m.s.r,m.s.c,m.e.r,m.e.c));
 
   // ファイル名・ダウンロード
   const sn=(shopName||"店舗").replace(/[\\/:*?"<>|]/g,"");
