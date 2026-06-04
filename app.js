@@ -480,7 +480,10 @@ function App(){
 
   // periodsが来たらapidを設定（URLで指定済みの場合は上書きしない）
   useEffect(()=>{
-    if(!apid&&periods.length>0&&urlResolved)setApid(periods[0].id);
+    if(!apid&&periods.length>0&&urlResolved){
+      const latest=[...periods].sort((a,b)=>new Date(b.startDate)-new Date(a.startDate))[0];
+      setApid(latest.id);
+    }
   },[periods,urlResolved]);
 
   // ===================================================================
@@ -519,8 +522,10 @@ function App(){
   },[]);
 
   // ap: apidに対応するperiodを取得
-  // urlLocked時はapidが確定するまでperiods[0]を使わない
-  const ap=periods.find(p=>p.id===apid)||(urlLocked?null:periods[0]);
+  // 最新の期間 = startDateが最も新しいperiod
+  const latestPeriod=periods.length>0?[...periods].sort((a,b)=>new Date(b.startDate)-new Date(a.startDate))[0]:null;
+  // urlLocked時はapidが確定するまで表示しない、それ以外は最新期間をデフォルトに
+  const ap=periods.find(p=>p.id===apid)||(urlLocked?null:latestPeriod);
   const effectiveSettings=settings||makeSettings(sid);
 
   // ローディング画面（Phase1完了まで、またはURLモードでperiodsが届くまで）
@@ -1348,10 +1353,18 @@ function expXl(p,subs,staffList,tt,shopName){
   const SC=(r,c,val,al,fill,border,font)=>{
     const cell=ws.getRow(r).getCell(c);
     cell.value=(val===null||val===undefined||val==="")? null:val;
-    cell.alignment=al||aV; // デフォルト縦書き
-    cell.fill=fill||fNone;
-    cell.border=border||{};
-    cell.font={name:"Yu Gothic",size:10,...(font||{})}; // デフォルト Yu Gothic
+    // alignmentはObject.assignで確実に反映
+    const a=al||aV;
+    cell.alignment=Object.assign({},a);
+    // fillを確実に設定
+    const f=fill||fNone;
+    if(f.pattern==="none"){
+      cell.fill={type:"pattern",pattern:"none",fgColor:{argb:"FFFFFFFF"},bgColor:{argb:"FFFFFFFF"}};
+    } else {
+      cell.fill=Object.assign({},f);
+    }
+    cell.border=border?Object.assign({},border):{};
+    cell.font=Object.assign({name:"HG正楷書体-PRO",size:11,bold:true},font||{}); // デフォルトHGフォント
   };
 
   // ===== Row1: ヘッダー (高さ120, 全縦書き) =====
@@ -1384,7 +1397,7 @@ function expXl(p,subs,staffList,tt,shopName){
     ws.getRow(rB).height=18;
 
     // A列: 日付 (medium四辺, 上下結合, 横書き)
-    SC(rT,C_PER,day,aH,fill,{top:M,bottom:M,left:M,right:M},{name:"HG正楷書体-PRO",bold:true,size:11});
+    SC(rT,C_PER,day,aH,fill,{top:M,bottom:M,left:M,right:M},{name:"HG正楷書体-PRO",bold:true,size:11,color:{argb:"FF000000"}});
     SC(rB,C_PER,null,aH,fill,{top:M,bottom:M,left:M,right:M});
     ws.mergeCells(rT,C_PER,rB,C_PER);
 
@@ -1403,8 +1416,8 @@ function expXl(p,subs,staffList,tt,shopName){
       // 下行: top:hair, bot:thin (最終日はbot:medium)
       const botT=isLast?M:T;
       if(isWork){
-        SC(rT,ci,sh.start?timeToNum(sh.start):null,aH,fill,{top:M,bottom:H,left:T,right:T},{size:10});
-        SC(rB,ci,sh.end?timeToNum(sh.end):null,aH,fill,{top:H,bottom:botT,left:T,right:T},{size:10});
+        SC(rT,ci,sh.start?timeToNum(sh.start):null,aH,fill,{top:M,bottom:H,left:T,right:T},{name:"Yu Gothic",bold:false,size:10});
+        SC(rB,ci,sh.end?timeToNum(sh.end):null,aH,fill,{top:H,bottom:botT,left:T,right:T},{name:"Yu Gothic",bold:false,size:10});
       } else {
         // 休み: 斜線（右上→左下）
         const diagU={up:false,down:true,style:"thin",color:{argb:R("AAAAAA")}};
