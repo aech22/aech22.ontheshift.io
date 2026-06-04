@@ -1351,7 +1351,7 @@ function expXl(p,subs,staffList,tt,shopName){
     cell.alignment=al||aH;
     cell.fill=fill||fNone;
     cell.border=border||{};
-    cell.font={name:"Yu Gothic",size:10,...(font||{})};
+    cell.font={name:"Yu Gothic",size:10,...(font||{})}; // デフォルト Yu Gothic
   };
 
   // ===== Row1: ヘッダー (高さ120, 全縦書き) =====
@@ -1377,19 +1377,19 @@ function expXl(p,subs,staffList,tt,shopName){
   dates.forEach((ds,di)=>{
     const d=pd(ds),dow=d.getDay(),day=d.getDate(),wd=WD[dow];
     const isSat=dow===6,isSunHol=dow===0||isHoliday(ds);
-    const fill=isSat?fSat:isSunHol?fHol:fNone;
+    const fill=isSat?fSat:isSunHol?fHol:fNone; // 平日=塗りなし
     const isLast=di===dates.length-1;
     const rT=2+di*2, rB=rT+1;
     ws.getRow(rT).height=18;
     ws.getRow(rB).height=18;
 
     // A列: 日付 (medium四辺, 上下結合, 横書き)
-    SC(rT,C_PER,day,aH,fill,{top:M,bottom:M,left:M,right:M},{bold:true,size:11});
+    SC(rT,C_PER,day,aH,fill,{top:M,bottom:M,left:M,right:M},{name:"HG正楷書体-PRO",bold:true,size:11});
     SC(rB,C_PER,null,aH,fill,{top:M,bottom:M,left:M,right:M});
     ws.mergeCells(rT,C_PER,rB,C_PER);
 
     // B列: 曜日 (medium四辺, 上下結合, 横書き)
-    SC(rT,C_WD_H,wd,aH,fill,{top:M,bottom:M,left:M,right:M},{bold:true,size:11});
+    SC(rT,C_WD_H,wd,aH,fill,{top:M,bottom:M,left:M,right:M},{name:"HG正楷書体-PRO",bold:true,size:11,color:{argb:R("000000")}});
     SC(rB,C_WD_H,null,aH,fill,{top:M,bottom:M,left:M,right:M});
     ws.mergeCells(rT,C_WD_H,rB,C_WD_H);
 
@@ -1414,12 +1414,12 @@ function expXl(p,subs,staffList,tt,shopName){
     });
 
     // 右端曜日: medium四辺, 上下結合
-    SC(rT,C_WD_R,wd,aH,fill,{top:M,bottom:M,left:M,right:M},{bold:true,size:11});
+    SC(rT,C_WD_R,wd,aH,fill,{top:M,bottom:M,left:M,right:M},{name:"HG正楷書体-PRO",bold:true,size:11,color:{argb:R("000000")}});
     SC(rB,C_WD_R,null,aH,fill,{top:M,bottom:M,left:M,right:M});
     ws.mergeCells(rT,C_WD_R,rB,C_WD_R);
 
     // 右端日付: medium四辺, 上下結合
-    SC(rT,C_SHOP_R,day,aH,fill,{top:M,bottom:M,left:M,right:M},{bold:true,size:11});
+    SC(rT,C_SHOP_R,day,aH,fill,{top:M,bottom:M,left:M,right:M},{name:"HG正楷書体-PRO",bold:true,size:11});
     SC(rB,C_SHOP_R,null,aH,fill,{top:M,bottom:M,left:M,right:M});
     ws.mergeCells(rT,C_SHOP_R,rB,C_SHOP_R);
   });
