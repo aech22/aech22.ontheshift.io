@@ -214,6 +214,23 @@ function resolvePeriodFromUrl(shops,allPeriods){
 // メインアプリ - 3フェーズ初期化
 // ============================================================
 
+// ============================================================
+// Cookie管理（端末ごとに独立した店舗を管理）
+// ============================================================
+function setCookie(name,value,days){
+  const exp=new Date();exp.setDate(exp.getDate()+(days||365));
+  document.cookie=`${name}=${encodeURIComponent(value)};expires=${exp.toUTCString()};path=/;SameSite=Lax`;
+}
+function getCookie(name){
+  const m=document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`));
+  return m?decodeURIComponent(m[1]):null;
+}
+function delCookie(name){
+  document.cookie=`${name}=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/`;
+}
+const CK_SHOP="ots_shopId"; // 端末の店舗IDを保存するCookieキー
+const ckStaffKey=(shopId,periodId)=>`ots_staff_${shopId}_${periodId}`; // スタッフ名Cookie
+
 // リロード時の状態復元用セッションキー
 const SS_SHOP="ss_shopId";
 const SS_APID="ss_apid";
@@ -340,21 +357,42 @@ function App(){
           setReady(true);
         });
       } else {
-        // URLなし: セッションに保存された店舗があれば復元、なければshops[0]
-        const savedShopId=ssGet(SS_SHOP,null);
-        const restoredShop=savedShopId?sh.find(s=>s.id===savedShopId):null;
-        const targetShop=restoredShop||sh[0];
-        currentShopIdRef.current=targetShop.id;
-        setCurrentShopId(targetShop.id);
-        // Phase1内で購読開始（sidが確定した直後）
-        startSubscriptions(targetShop.id,sh);
-        setReady(true);
+        // URLなし: Cookie優先 → 該当shop存在すればそれを使う
+        const ckShopId=getCookie(CK_SHOP);
+        const cookieShop=ckShopId?sh.find(s=>s.id===ckShopId):null;
+        if(cookieShop){
+          // Cookieの店舗が存在する → その店舗を使用
+          console.log("Cookie店舗:", cookieShop.name);
+          currentShopIdRef.current=cookieShop.id;
+          setCurrentShopId(cookieShop.id);
+          startSubscriptions(cookieShop.id,sh);
+          setReady(true);
+        } else {
+          // Cookieなし or 無効 → 新規店舗を作成してCookieに保存
+          const newShop=makeShop("メイン店舗");
+          const newShops=[...sh,newShop];
+          const obj={};newShops.forEach(s=>{if(s&&s.id)obj[s.id]=s;});
+          firebaseDB.ref("global/shops").set(obj);
+          setCookie(CK_SHOP,newShop.id,365);
+          setShops(newShops);ls("shift_shops_v6",newShops);
+          console.log("新規店舗作成:", newShop.id);
+          currentShopIdRef.current=newShop.id;
+          setCurrentShopId(newShop.id);
+          startSubscriptions(newShop.id,newShops);
+          setReady(true);
+        }
       }
     }).catch(e=>{
       console.warn("shops読み込み失敗:",e);
-      const local=lg("shift_shops_v6",null)||[makeShop("メイン店舗")];
-      setShops(local); setCurrentShopId(local[0].id);
-      startSubscriptions(local[0].id,local);
+      // エラー時もCookie確認
+      const ckShopId=getCookie(CK_SHOP);
+      const local=lg("shift_shops_v6",null)||[];
+      const ckShop=ckShopId?local.find(s=>s.id===ckShopId):null;
+      const target=ckShop||(local.length>0?local[0]:makeShop("メイン店舗"));
+      if(!ckShopId)setCookie(CK_SHOP,target.id,365);
+      setShops(local.length>0?local:[target]);
+      setCurrentShopId(target.id);
+      startSubscriptions(target.id,local.length>0?local:[target]);
       setReady(true);
     });
 
@@ -363,10 +401,13 @@ function App(){
 
   const shop=shops.find(s=>s.id===currentShopId)||shops[0];
   const sid=shop?.id||"default";
-  // refとsessionStorageを最新のsidに同期（URLトークンがある場合は保存しない）
+  // refとsessionStorage・Cookieを最新のsidに同期
   useEffect(()=>{
     currentShopIdRef.current=sid;
-    if(!_hasUrlToken) ssSave(SS_SHOP,sid);
+    if(!_hasUrlToken){
+      ssSave(SS_SHOP,sid);
+      setCookie(CK_SHOP,sid,365); // Cookieにも保存（1年間）
+    }
   },[sid]);
 
   // 共有テンプレート（全店舗共通: global/templates）
@@ -599,7 +640,9 @@ function App(){
 // スタッフ画面
 // ============================================================
 function StaffView({periods,ap,apid,setApid,shopId,settings,subs,staffList,onSub,shopName,urlLocked=false}){
-  const[name,setName]=useState("");
+  // Cookieからスタッフ名を復元
+  const savedName=shopId&&apid?getCookie(ckStaffKey(shopId,apid))||"":"";
+  const[name,setName]=useState(savedName);
   const[sd,setSd]=useState({});
   const[done,setDone]=useState(false);
   const[conf,setConf]=useState(false);
@@ -613,15 +656,43 @@ function StaffView({periods,ap,apid,setApid,shopId,settings,subs,staffList,onSub
   const dl=idp(ap?.deadlineDate);
   const dates=ap?gd(ap.startDate,ap.endDate):[];
 
-  // 名前はセッション内のみ保持（デフォルト空欄）
+  // 期間変更時にシフトデータをリセット
+  // Cookieに保存された名前がある場合は提出済みデータを復元
   useEffect(()=>{
+    if(!apid||!ap)return;
+    const ckName=shopId&&apid?getCookie(ckStaffKey(shopId,apid))||"":"";
+    if(ckName){
+      // 提出済みデータを検索
+      const prevSub=subs.find(s=>s.staffName===ckName&&s.periodId===apid);
+      if(prevSub){
+        // 提出済み → データを復元して完了画面を表示
+        setName(ckName);
+        const init={};
+        gd(ap.startDate,ap.endDate).forEach(d=>{
+          init[d]=(prevSub.shifts||{})[d]||{status:"holiday"};
+        });
+        setSd(init);
+        setComment(prevSub.comment||"");
+        setDone(true);
+        return;
+      }
+      // 名前はあるが未提出 → 名前だけ復元
+      setName(ckName);
+    }
     const i={};dates.forEach(d=>{i[d]={status:"holiday"};});
     setSd(i);setDone(false);setComment("");
-  },[apid,ap?.startDate,ap?.endDate]);
+  },[apid,ap?.startDate,ap?.endDate,shopId]);
 
   const tt_=m=>{setToast(m);clearTimeout(tr.current);tr.current=setTimeout(()=>setToast(null),2500);};
   const upd=(ds,u)=>setSd(p=>({...p,[ds]:{...p[ds],...u}}));
-  const reset=()=>{const i={};dates.forEach(d=>{i[d]={status:"holiday"};});setSd(i);setDone(false);setComment("");tt_("🔄 リセットしました");};
+  const reset=()=>{
+    // CookieとStateをリセット
+    if(shopId&&apid) delCookie(ckStaffKey(shopId,apid));
+    setName("");
+    const i={};dates.forEach(d=>{i[d]={status:"holiday"};});
+    setSd(i);setDone(false);setComment("");
+    tt_("🔄 リセットしました");
+  };
 
   // 候補取得（日付別 > 祝日[key=7] > 曜日別 > 全体）
   const gc=ds=>{
@@ -639,6 +710,8 @@ function StaffView({periods,ap,apid,setApid,shopId,settings,subs,staffList,onSub
 
   const submit=()=>{
     const sub={id:Date.now().toString(),periodId:apid,staffName:name.trim(),submittedAt:new Date().toISOString(),shifts:Object.fromEntries(dates.map(d=>[d,sd[d]||{status:"holiday"}])),comment:comment.trim()};
+    // スタッフ名をCookieに保存（1年間）
+    if(shopId&&apid) setCookie(ckStaffKey(shopId,apid),name.trim(),365);
     onSub(sub);setDone(true);setConf(false);
   };
 
@@ -1739,6 +1812,7 @@ function SubsTab({subs,periods,staffList,onSave,tt}){
 
 // ===== 設定タブ =====
 function SetTab({settings,onSave,subs,saveSubs,tt,syncStatus}){
+  const[inviteInput,setInviteInput]=useState("");
   const[pw,setPw]=useState("");
   // データエクスポート（JSON）
   const exportData=()=>{
@@ -1773,6 +1847,37 @@ function SetTab({settings,onSave,subs,saveSubs,tt,syncStatus}){
   };
   return(<div>
     <AT>⚙️ システム設定</AT>
+    <AC title="🏪 端末・店舗の紐付け（招待コード）">
+      <div style={{fontSize:13,color:"rgba(255,255,255,.6)",marginBottom:10,lineHeight:1.6}}>
+        この端末のCookieに紐付いている店舗IDです。別の端末でこの店舗を管理したい場合は「招待コード」を別端末で入力してください。
+      </div>
+      <AL>この端末のCookie（店舗ID）</AL>
+      <div style={{display:"flex",gap:8,marginBottom:12,alignItems:"center"}}>
+        <input readOnly value={getCookie(CK_SHOP)||"（未設定）"} style={{...AI,flex:1,fontSize:11,fontFamily:"monospace"}}/>
+        <button onClick={()=>{const v=getCookie(CK_SHOP);if(v)navigator.clipboard.writeText(v).then(()=>tt("✅ コピーしました"));}} style={AB}>コピー</button>
+      </div>
+      <AL>別端末の招待コード（別端末の店舗IDを入力）</AL>
+      <div style={{display:"flex",gap:8}}>
+        <input value={inviteInput} onChange={e=>setInviteInput(e.target.value)} placeholder="別端末の店舗IDを貼り付け" style={{...AI,flex:1}}/>
+        <button onClick={()=>{
+          if(!inviteInput.trim()){tt("⚠️ 招待コードを入力");return;}
+          const code=inviteInput.trim();
+          if(!firebaseDB){tt("⚠️ Firebase未接続");return;}
+          firebaseDB.ref("global/shops").once("value").then(snap=>{
+            const val=snap.val();
+            const sh=val?(typeof val==="object"&&!Array.isArray(val)?Object.values(val):val):[];
+            const found=Array.isArray(sh)?sh.find(s=>s&&s.id===code):null;
+            if(found){
+              setCookie(CK_SHOP,code,365);
+              tt(`✅「${found.name}」に紐付けました。ページをリロードしてください。`);
+              setInviteInput("");
+            } else {
+              tt("❌ 該当する店舗が見つかりません");
+            }
+          }).catch(()=>tt("❌ 確認に失敗しました"));
+        }} style={AB}>適用</button>
+      </div>
+    </AC>
     <AC title="🔴 リアルタイム同期（Firebase）">
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14,padding:"12px 14px",background:"rgba(255,255,255,.05)",borderRadius:10}}>
         <div style={{width:10,height:10,borderRadius:"50%",background:syncStatus==="online"?"#06C755":syncStatus==="offline"?"#F59E0B":"#6B7280",flexShrink:0}}/>
