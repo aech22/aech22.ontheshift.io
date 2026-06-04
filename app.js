@@ -1289,7 +1289,7 @@ function expXl(p,subs,staffList,tt,shopName){
   const periodLabel=`${mo}月${isLatter?"後半":"前半"}`;
 
   // 列インデックス（1-based）
-  const C_D=4,C_E=5,C_F=6,C_STAFF=7;
+  const C_D=1,C_E=2,C_F=3,C_STAFF=4; // A1から開始
   const C_WD_R=C_STAFF+sl.length;
   const C_DATE_R=C_STAFF+sl.length+1;
 
@@ -1323,12 +1323,11 @@ function expXl(p,subs,staffList,tt,shopName){
     pageSetup:{orientation:"landscape"}
   });
 
-  // 列幅
-  [1,2,3].forEach(c=>{ws.getColumn(c).width=4;});
-  ws.getColumn(C_D).width=5;
-  ws.getColumn(C_E).width=5;
-  ws.getColumn(C_F).width=3;
-  sl.forEach((_,si)=>ws.getColumn(C_STAFF+si).width=6);
+  // 列幅（A1から開始）
+  ws.getColumn(C_D).width=5;   // A: 日付
+  ws.getColumn(C_E).width=5;   // B: 曜日
+  ws.getColumn(C_F).width=3;   // C: 空列
+  sl.forEach((_,si)=>ws.getColumn(C_STAFF+si).width=6); // D〜: スタッフ
   ws.getColumn(C_WD_R).width=5;
   ws.getColumn(C_DATE_R).width=5;
 
@@ -1352,8 +1351,7 @@ function expXl(p,subs,staffList,tt,shopName){
 
   // ===== 行1: ヘッダー（高さ120） =====
   ws.getRow(1).height=120;
-  [1,2,3].forEach(c=>SC(1,c,null,aH,COL_HDR,bAll));
-  SC(1,C_D,periodLabel,aV,COL_HDR,bAll,{bold:true,size:11});
+  SC(1,C_D,periodLabel,aV,COL_HDR,bAll,{bold:true,size:11}); // A1: 期間ラベル（縦書き）
   SC(1,C_E,"曜日",aV,COL_HDR,bAll,{bold:true,size:11});
   SC(1,C_F,null,aH,COL_HDR,bAll);
   sl.forEach((nm,si)=>SC(1,C_STAFF+si,nm,aV,COL_HDR,bAll,{bold:true,size:10}));
@@ -1371,11 +1369,10 @@ function expXl(p,subs,staffList,tt,shopName){
     ws.getRow(rT).height=18;
     ws.getRow(rB).height=18;
 
-    // A〜C列（固定ヘッダー色）
-    [1,2,3].forEach(c=>{SC(rT,c,null,aH,COL_HDR,bAll);SC(rB,c,null,aH,COL_HDR,bAll);});
+    // （A〜C列は廃止: A1から始まるため不要）
 
     // D列: 日付（横書き・上下結合）
-    SC(rT,C_D,day,aH,bg,bAll,{bold:true,size:11});
+    SC(rT,C_D,day,aH,bg,bAll,{bold:true,size:11}); // 日付横書き
     SC(rB,C_D,null,aH,bg,bAll);
     ws.mergeCells(rT,C_D,rB,C_D);
 
@@ -1400,8 +1397,8 @@ function expXl(p,subs,staffList,tt,shopName){
         SC(rB,ci,ev,aH,bg,bBot,{size:10});
       } else {
         // 休み: 斜線
-        const dB={...bTop,diagonal:{up:true,down:true,style:"thin",color:{argb:RGB("AAAAAA")}}};
-        const dB2={...bBot,diagonal:{up:true,down:true,style:"thin",color:{argb:RGB("AAAAAA")}}};
+        const dB={...bTop,diagonal:{up:false,down:true,style:"thin",color:{argb:RGB("AAAAAA")}}};
+        const dB2={...bBot,diagonal:{up:false,down:true,style:"thin",color:{argb:RGB("AAAAAA")}}};
         SC(rT,ci,null,aH,bgR,dB);
         SC(rB,ci,null,aH,bgR,dB2);
       }
