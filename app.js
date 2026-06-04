@@ -1299,12 +1299,13 @@ function expXl(p,subs,staffList,tt,shopName){
   const COL_SAT =RGB("DDEEFF");
   const COL_HOL =RGB("FFEEEE");
   const COL_WEE =RGB("FFFFFF");
-  const COL_SATR=RGB("CCEEFF");
-  const COL_HOLR=RGB("FFDDDD");
-  const COL_WEER=RGB("EEEEEE");
+  const COL_SATR=RGB("DDEEFF"); // 土曜休みは土曜色のまま
+  const COL_HOLR=RGB("FFEEEE"); // 日祝休みは日祝色のまま
+  const COL_WEER=RGB("FFFFFF"); // 平日休みは白（塗りなし）
 
   // 枠線スタイル
   const T={style:"thin",color:{argb:RGB("AAAAAA")}};
+  const K={style:"medium",color:{argb:RGB("666666")}}; // 太い外枠
   const H={style:"hair",color:{argb:RGB("BBBBBB")}};
   const bAll ={top:T,bottom:T,left:T,right:T};
   const bTop ={top:T,bottom:H,left:T,right:T}; // 出勤（下に点線）
@@ -1416,6 +1417,25 @@ function expXl(p,subs,staffList,tt,shopName){
     SC(rB,C_DATE_R,null,aH,bg,bAll);
     ws.mergeCells(rT,C_DATE_R,rB,C_DATE_R);
   });
+
+  // 外枠（シート全体に太い枠線）
+  const totalR=1+dates.length*2;
+  const totalC=C_DATE_R;
+  for(let r=1;r<=totalR;r++){
+    for(let c=1;c<=totalC;c++){
+      const cell=ws.getRow(r).getCell(c);
+      const b=cell.border||{};
+      const isTop=r===1,isBot=r===totalR,isLeft=c===1,isRight=c===totalC;
+      if(isTop||isBot||isLeft||isRight){
+        cell.border={
+          top:   isTop  ?K:(b.top   ||T),
+          bottom:isBot  ?K:(b.bottom||T),
+          left:  isLeft ?K:(b.left  ||T),
+          right: isRight?K:(b.right ||T),
+        };
+      }
+    }
+  }
 
   // ファイル名・ダウンロード
   const sn=(shopName||"店舗").replace(/[\\/:*?"<>|]/g,"");
