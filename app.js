@@ -1284,20 +1284,29 @@ function expXl(p,subs,staffList,tt,shopName){
   if(sl.length===0){tt("⚠️ 提出データがありません");return;}
 
   // ============================================================
-  // レイアウト（列方向）：
-  //   C0  : 店舗名（縦書き）
-  //   C1  : 期間（縦書き）
-  //   C2〜C(2+sl-1) : スタッフ名（縦書き）
-  //   C(2+sl)       : 期間（縦書き・右端ミラー）
-  //   C(2+sl+1)     : 店舗名（縦書き・右端ミラー）
+  // サンプルファイルに準拠したフォーマット
   //
-  // レイアウト（行方向）：
-  //   R0  : 店舗名 | 期間 | スタッフ名... | 期間 | 店舗名
-  //   R(1+di*2)   : 日付数字（結合↓）| 曜日（結合↓）| 出勤時間... | 曜日（結合↓）| 日付数字（結合↓）
-  //   R(1+di*2+1) : (結合)           | (結合)        | 退勤時間... | (結合)        | (結合)
+  // 列構成:
+  //   A,B,C: 予備（空）
+  //   D: 日付（数字、上下2行結合、中央揃え）
+  //   E: 曜日（縦書き、上下2行結合、中央揃え）
+  //   F: 空列
+  //   G〜G+sl-1: スタッフ列（出勤上行・退勤下行）
+  //   G+sl: 曜日（縦書き、上下2行結合）右端ミラー
+  //   G+sl+1: 日付（数字、上下2行結合）右端ミラー
   //
-  // 全文字縦書き、全セル中央揃え
-  // 土曜=薄青、日祝=薄赤（日付〜日付列の範囲）
+  // 行構成:
+  //   Row 1(R0): ヘッダー行
+  //     D1=期間ラベル(縦書き), E1=曜日(縦書き)
+  //     G1〜=スタッフ名(縦書き)
+  //     右端=曜日(縦書き)・店舗名(縦書き)
+  //   Row 2以降: 1日=2行
+  //     上行: D=日付数字, E=曜日, G〜=出勤時間, 右=曜日, 右+1=日付
+  //     下行: D結合, E結合, G〜=退勤時間, 右結合, 右+1結合
+  //
+  // 土曜=薄青(DDEEFF), 日祝=薄赤(FFEEEE)
+  // 全セル: 細い枠線・中央揃え
+  // 文字: スタッフ名・期間・曜日・店舗名=縦書き, 数字=横書き
   // ============================================================
 
   const firstDate=pd(dates[0]);
@@ -1305,196 +1314,137 @@ function expXl(p,subs,staffList,tt,shopName){
   const isLatter=firstDate.getDate()>=16||(p.label&&p.label.includes("後半"));
   const periodLabel=`${mo}月${isLatter?"後半":"前半"}`;
 
-  // 列インデックス
-  const COL_SHOP_L=0;
-  const COL_PERIOD_L=1;
-  const COL_STAFF_START=2;
-  const COL_PERIOD_R=2+sl.length;
-  const COL_SHOP_R=2+sl.length+1;
-  const totalCols=2+sl.length+2;
-  const totalRows=1+dates.length*2;
+  // 列インデックス（0-based）
+  const C_D=3;          // D列: 日付
+  const C_E=4;          // E列: 曜日
+  // F列(5)は空列
+  const C_STAFF=6;      // G列〜: スタッフ
+  const C_WD_R=C_STAFF+sl.length;    // 右端曜日
+  const C_DATE_R=C_STAFF+sl.length+1;// 右端日付
+  const TOTAL_COLS=C_DATE_R+1;
+  const TOTAL_ROWS=1+dates.length*2;
 
   // スタイル定義
-  const thin={style:"thin",color:{rgb:"BBBBBB"}};
+  const thin={style:"thin",color:{rgb:"AAAAAA"}};
   const hair={style:"hair",color:{rgb:"BBBBBB"}};
-  const VT=255; // 縦書き textRotation
-  const CA_V={horizontal:"center",vertical:"center",textRotation:VT}; // 縦書き中央
-  const CA_H={horizontal:"center",vertical:"center"};                  // 横書き中央
-  const FILL_HEADER={patternType:"solid",fgColor:{rgb:"F0F0F0"}};
-  const FILL_SAT={patternType:"solid",fgColor:{rgb:"DDEEFF"}};
-  const FILL_HOL={patternType:"solid",fgColor:{rgb:"FFEEEE"}};
-  const FILL_WEE={patternType:"solid",fgColor:{rgb:"FFFFFF"}};
-  const FILL_REST_SAT={patternType:"solid",fgColor:{rgb:"DDEEFF"}};
-  const FILL_REST_HOL={patternType:"solid",fgColor:{rgb:"FFEEEE"}};
-  const FILL_REST_WEE={patternType:"solid",fgColor:{rgb:"EEEEEE"}};
+  const bAll={top:thin,bottom:thin,left:thin,right:thin};
+  const bTopDot={top:thin,bottom:hair,left:thin,right:thin};  // 出勤セル（下に点線）
+  const bBotDot={top:hair,bottom:thin,left:thin,right:thin};  // 退勤セル（上に点線）
+  const CA_H={horizontal:"center",vertical:"center"};         // 横書き中央
+  const CA_V={horizontal:"center",vertical:"center",textRotation:255}; // 縦書き中央
+  const FH={patternType:"solid",fgColor:{rgb:"F0F0F0"}};     // ヘッダー背景
+  const FW={patternType:"solid",fgColor:{rgb:"FFFFFF"}};     // 白
+  const FS={patternType:"solid",fgColor:{rgb:"DDEEFF"}};     // 土曜薄青
+  const FHO={patternType:"solid",fgColor:{rgb:"FFEEEE"}};    // 日祝薄赤
+  const FSR={patternType:"solid",fgColor:{rgb:"CCEEFF"}};    // 土曜休み
+  const FHOR={patternType:"solid",fgColor:{rgb:"FFDDDD"}};   // 日祝休み
+  const FGR={patternType:"solid",fgColor:{rgb:"EEEEEE"}};    // 平日休み
 
-  const allBorder={top:thin,bottom:thin,left:thin,right:thin};
-  const topDotBorder={top:thin,bottom:hair,left:thin,right:thin};
-  const botDotBorder={top:hair,bottom:thin,left:thin,right:thin};
-
-  const ws={"!ref":XLSX.utils.encode_range({s:{r:0,c:0},e:{r:totalRows-1,c:totalCols-1}})};
-
-  const sc=(ws,r,c,v,s)=>{
-    const ref=XLSX.utils.encode_cell({r,c});
-    const t=(typeof v==="number")?"n":"s";
-    ws[ref]={v:(v===undefined||v===null)?"":v,t,s:s||{alignment:CA_H}};
-  };
-
+  const ws={};
   const merges=[];
 
+  const S=(r,c,v,s)=>{
+    const ref=XLSX.utils.encode_cell({r,c});
+    const t=(typeof v==="number")?"n":"s";
+    ws[ref]={v:(v===null||v===undefined)?"":v,t,s:s||{alignment:CA_H,border:bAll}};
+  };
+
   // ===== 行0: ヘッダー =====
-  // 店舗名（左）
-  sc(ws,0,COL_SHOP_L,shopName||"",{font:{bold:true,sz:11},alignment:CA_V,fill:FILL_HEADER,border:allBorder});
-  // 期間（左）
-  sc(ws,0,COL_PERIOD_L,periodLabel,{font:{bold:true,sz:11},alignment:CA_V,fill:FILL_HEADER,border:allBorder});
+  // A〜C列: 空
+  [0,1,2].forEach(c=>S(0,c,"",{fill:FH,border:bAll,alignment:CA_H}));
+  // D列: 期間ラベル（縦書き）
+  S(0,C_D,periodLabel,{font:{bold:true,sz:11},alignment:CA_V,fill:FH,border:bAll});
+  // E列: 曜日ヘッダー（縦書き）
+  S(0,C_E,"曜日",{font:{bold:true,sz:11},alignment:CA_V,fill:FH,border:bAll});
+  // F列: 空
+  S(0,5,"",{fill:FH,border:bAll,alignment:CA_H});
   // スタッフ名（縦書き）
   sl.forEach((nm,si)=>{
-    sc(ws,0,COL_STAFF_START+si,nm,{font:{bold:true,sz:10},alignment:CA_V,fill:FILL_HEADER,border:allBorder});
+    S(0,C_STAFF+si,nm,{font:{bold:true,sz:10},alignment:CA_V,fill:FH,border:bAll});
   });
-  // 期間（右）
-  sc(ws,0,COL_PERIOD_R,periodLabel,{font:{bold:true,sz:11},alignment:CA_V,fill:FILL_HEADER,border:allBorder});
-  // 店舗名（右）
-  sc(ws,0,COL_SHOP_R,shopName||"",{font:{bold:true,sz:11},alignment:CA_V,fill:FILL_HEADER,border:allBorder});
+  // 右端: 曜日・店舗名（縦書き）
+  S(0,C_WD_R,"曜日",{font:{bold:true,sz:11},alignment:CA_V,fill:FH,border:bAll});
+  S(0,C_DATE_R,shopName||"",{font:{bold:true,sz:11},alignment:CA_V,fill:FH,border:bAll});
 
   // ===== 行1〜: データ（1日=2行）=====
   dates.forEach((ds,di)=>{
     const d=pd(ds),dow=d.getDay(),day=d.getDate(),wd=WD[dow];
     const isSat=dow===6,isSunHol=dow===0||isHoliday(ds);
-    const bg=isSat?FILL_SAT:isSunHol?FILL_HOL:FILL_WEE;
-    const bgRest=isSat?FILL_REST_SAT:isSunHol?FILL_REST_HOL:FILL_REST_WEE;
-    const rT=1+di*2;
-    const rB=1+di*2+1;
-    const wdColor=isSat?"3B82F6":isSunHol?"FF4757":"000000";
-
-    // A列: 日付数字（左・上下結合）
-    sc(ws,rT,COL_SHOP_L,"",{fill:FILL_HEADER,border:allBorder,alignment:CA_H});
-    sc(ws,rB,COL_SHOP_L,"",{fill:FILL_HEADER,border:allBorder,alignment:CA_H});
-    merges.push({s:{r:rT,c:COL_SHOP_L},e:{r:rB,c:COL_SHOP_L}});
-
-    // B列: 期間列（左・上下結合）
-    sc(ws,rT,COL_PERIOD_L,"",{fill:FILL_HEADER,border:allBorder,alignment:CA_H});
-    sc(ws,rB,COL_PERIOD_L,"",{fill:FILL_HEADER,border:allBorder,alignment:CA_H});
-    merges.push({s:{r:rT,c:COL_PERIOD_L},e:{r:rB,c:COL_PERIOD_L}});
-
-    // ※ 日付と曜日は C2+sl列（右側）に配置
-    // スタッフデータ列の左に日付・曜日を置く → C2列から
-    // 実際のスタッフ列インデックス: COL_STAFF_START(2)〜COL_STAFF_START+sl.length-1
-
-    // 日付（左端のスタッフ列の左に別途置く必要あり）
-    // → 仕様: 左から「店名、期間、名前1,名前2...、期間、日付、曜日、日付」
-    // 再解釈: 左2列(店舗・期間)はヘッダー固定列、
-    //         スタッフ列の後に右端: 曜日列・日付列
-    // 行は: 日付数字 | 曜日 → 左側に配置し直す
-
-    // ---- 仕様を再整理 ----
-    // 列: [店舗名][期間][日付][曜日][名前1][名前2]...[曜日][日付]
-    // COL_SHOP_L=0, COL_PERIOD_L=1, COL_DATE_L=2, COL_WD_L=3
-    // COL_STAFF_START=4, COL_WD_R=4+sl, COL_DATE_R=5+sl
-
-    // → この関数内で列定義を上書きします
-    // 上記の setCell 呼び出しは後で正しい列で上書きされます
-    // （関数の最初の列定義が間違っていたので下で再定義）
-  });
-
-  // ============ 正しいフォーマットで作り直し ============
-  // 列定義（正しい仕様）:
-  // 0:店舗名, 1:期間, 2:日付(左), 3:曜日(左), 4〜4+sl-1:スタッフ, 4+sl:曜日(右), 5+sl:日付(右)
-  const C_SHOP_L=0, C_PER_L=1, C_DATE_L=2, C_WD_L=3;
-  const C_STAFF=4;
-  const C_WD_R=4+sl.length;
-  const C_DATE_R=5+sl.length;
-  const TOTAL_COLS=6+sl.length;
-  const TOTAL_ROWS=1+dates.length*2;
-
-  const ws2={"!ref":XLSX.utils.encode_range({s:{r:0,c:0},e:{r:TOTAL_ROWS-1,c:TOTAL_COLS-1}})};
-  const merges2=[];
-  const S=(ws,r,c,v,s)=>{
-    const ref=XLSX.utils.encode_cell({r,c});
-    const t=(typeof v==="number")?"n":"s";
-    ws[ref]={v:(v===undefined||v===null)?"":v,t,s:s||{alignment:CA_H,border:allBorder}};
-  };
-
-  // --- ヘッダー行(R0) ---
-  S(ws2,0,C_SHOP_L,shopName||"",{font:{bold:true,sz:11},alignment:CA_V,fill:FILL_HEADER,border:allBorder});
-  S(ws2,0,C_PER_L,periodLabel,  {font:{bold:true,sz:11},alignment:CA_V,fill:FILL_HEADER,border:allBorder});
-  S(ws2,0,C_DATE_L,"",          {fill:FILL_HEADER,border:allBorder,alignment:CA_H});
-  S(ws2,0,C_WD_L,"",            {fill:FILL_HEADER,border:allBorder,alignment:CA_H});
-  sl.forEach((nm,si)=>{
-    S(ws2,0,C_STAFF+si,nm,{font:{bold:true,sz:10},alignment:CA_V,fill:FILL_HEADER,border:allBorder});
-  });
-  S(ws2,0,C_WD_R,"",   {fill:FILL_HEADER,border:allBorder,alignment:CA_H});
-  S(ws2,0,C_DATE_R,"", {fill:FILL_HEADER,border:allBorder,alignment:CA_H});
-
-  // --- データ行 ---
-  dates.forEach((ds,di)=>{
-    const d=pd(ds),dow=d.getDay(),day=d.getDate(),wd=WD[dow];
-    const isSat=dow===6,isSunHol=dow===0||isHoliday(ds);
-    const bgData=isSat?FILL_SAT:isSunHol?FILL_HOL:FILL_WEE;
-    const bgRest=isSat?{patternType:"solid",fgColor:{rgb:"DDEEFF"}}:isSunHol?{patternType:"solid",fgColor:{rgb:"FFEEEE"}}:{patternType:"solid",fgColor:{rgb:"EEEEEE"}};
+    const bgData=isSat?FS:isSunHol?FHO:FW;
+    const bgRest=isSat?FSR:isSunHol?FHOR:FGR;
     const wdColor={rgb:isSat?"3B82F6":isSunHol?"FF4757":"000000"};
-    const rT=1+di*2, rB=1+di*2+1;
+    const rT=1+di*2, rB=rT+1;
 
-    // 店舗名・期間列（固定ヘッダー列は空白）
-    [C_SHOP_L,C_PER_L].forEach(c=>{
-      S(ws2,rT,c,"",{fill:FILL_HEADER,border:allBorder,alignment:CA_H});
-      S(ws2,rB,c,"",{fill:FILL_HEADER,border:allBorder,alignment:CA_H});
+    // A〜C列: 空（行ごとに塗り）
+    [0,1,2].forEach(c=>{
+      S(rT,c,"",{fill:FH,border:bAll,alignment:CA_H});
+      S(rB,c,"",{fill:FH,border:bAll,alignment:CA_H});
     });
 
-    // 日付列（左・上下結合・縦書き）
-    S(ws2,rT,C_DATE_L,day,{font:{sz:11,bold:true},alignment:CA_H,fill:bgData,border:allBorder});
-    S(ws2,rB,C_DATE_L,"", {fill:bgData,border:allBorder,alignment:CA_H});
-    merges2.push({s:{r:rT,c:C_DATE_L},e:{r:rB,c:C_DATE_L}});
+    // D列: 日付（横書き・上下結合）
+    S(rT,C_D,day,{font:{sz:11,bold:true},alignment:CA_H,fill:bgData,border:bAll});
+    S(rB,C_D,"", {fill:bgData,border:bAll,alignment:CA_H});
+    merges.push({s:{r:rT,c:C_D},e:{r:rB,c:C_D}});
 
-    // 曜日列（左・上下結合・縦書き）
-    S(ws2,rT,C_WD_L,wd,{font:{sz:11,bold:true,color:wdColor},alignment:CA_V,fill:bgData,border:allBorder});
-    S(ws2,rB,C_WD_L,"", {fill:bgData,border:allBorder,alignment:CA_H});
-    merges2.push({s:{r:rT,c:C_WD_L},e:{r:rB,c:C_WD_L}});
+    // E列: 曜日（縦書き・上下結合）
+    S(rT,C_E,wd,{font:{sz:11,bold:true,color:wdColor},alignment:CA_V,fill:bgData,border:bAll});
+    S(rB,C_E,"", {fill:bgData,border:bAll,alignment:CA_H});
+    merges.push({s:{r:rT,c:C_E},e:{r:rB,c:C_E}});
 
-    // スタッフデータ列
+    // F列: 空
+    S(rT,5,"",{fill:bgData,border:bAll,alignment:CA_H});
+    S(rB,5,"",{fill:bgData,border:bAll,alignment:CA_H});
+
+    // スタッフ列
     sl.forEach((nm,si)=>{
       const sub=ss.find(s=>s.staffName===nm),sh=sub?.shifts?.[ds];
       const isWork=sh&&sh.status==="work";
       const ci=C_STAFF+si;
       if(isWork){
-        // 上行: 出勤（下に点線）
-        S(ws2,rT,ci,timeToNum(sh.start),{font:{sz:10},alignment:CA_H,fill:bgData,border:topDotBorder});
-        // 下行: 退勤（上に点線）
-        S(ws2,rB,ci,timeToNum(sh.end),  {font:{sz:10},alignment:CA_H,fill:bgData,border:botDotBorder});
+        const sv=sh.start?timeToNum(sh.start):"";
+        const ev=sh.end?timeToNum(sh.end):"";
+        // 出勤（上行・下に点線）
+        S(rT,ci,sv,{font:{sz:10},alignment:CA_H,fill:bgData,border:bTopDot});
+        // 退勤（下行・上に点線）
+        S(rB,ci,ev,{font:{sz:10},alignment:CA_H,fill:bgData,border:bBotDot});
       } else {
         // 休み: 斜線
-        const diagB={diagonal:{style:"thin",color:{rgb:"BBBBBB"}},diagonalUp:true,diagonalDown:true};
-        S(ws2,rT,ci,"",{fill:bgRest,border:{...{top:thin,bottom:hair,left:thin,right:thin},...diagB}});
-        S(ws2,rB,ci,"",{fill:bgRest,border:{...{top:hair,bottom:thin,left:thin,right:thin},...diagB}});
+        const diagB={diagonal:{style:"thin",color:{rgb:"AAAAAA"}},diagonalUp:true,diagonalDown:true};
+        S(rT,ci,"",{fill:bgRest,border:{...bTopDot,...diagB}});
+        S(rB,ci,"",{fill:bgRest,border:{...bBotDot,...diagB}});
       }
     });
 
-    // 曜日列（右・上下結合・縦書き）
-    S(ws2,rT,C_WD_R,wd,{font:{sz:11,bold:true,color:wdColor},alignment:CA_V,fill:bgData,border:allBorder});
-    S(ws2,rB,C_WD_R,"", {fill:bgData,border:allBorder,alignment:CA_H});
-    merges2.push({s:{r:rT,c:C_WD_R},e:{r:rB,c:C_WD_R}});
+    // 右端: 曜日（縦書き・上下結合）
+    S(rT,C_WD_R,wd,{font:{sz:11,bold:true,color:wdColor},alignment:CA_V,fill:bgData,border:bAll});
+    S(rB,C_WD_R,"", {fill:bgData,border:bAll,alignment:CA_H});
+    merges.push({s:{r:rT,c:C_WD_R},e:{r:rB,c:C_WD_R}});
 
-    // 日付列（右・上下結合・縦書き）
-    S(ws2,rT,C_DATE_R,day,{font:{sz:11,bold:true},alignment:CA_H,fill:bgData,border:allBorder});
-    S(ws2,rB,C_DATE_R,"", {fill:bgData,border:allBorder,alignment:CA_H});
-    merges2.push({s:{r:rT,c:C_DATE_R},e:{r:rB,c:C_DATE_R}});
+    // 右端: 日付（横書き・上下結合）
+    S(rT,C_DATE_R,day,{font:{sz:11,bold:true},alignment:CA_H,fill:bgData,border:bAll});
+    S(rB,C_DATE_R,"", {fill:bgData,border:bAll,alignment:CA_H});
+    merges.push({s:{r:rT,c:C_DATE_R},e:{r:rB,c:C_DATE_R}});
   });
 
-  ws2["!merges"]=merges2;
-  ws2["!cols"]=[
-    {wch:6},  // 店舗名
-    {wch:5},  // 期間
-    {wch:4},  // 日付(左)
-    {wch:4},  // 曜日(左)
-    ...sl.map(()=>({wch:7})),  // スタッフ
-    {wch:4},  // 曜日(右)
-    {wch:4},  // 日付(右)
+  // シート範囲・結合・列幅・行高さ
+  ws["!ref"]=XLSX.utils.encode_range({s:{r:0,c:0},e:{r:TOTAL_ROWS-1,c:TOTAL_COLS-1}});
+  ws["!merges"]=merges;
+  ws["!cols"]=[
+    {wch:4},{wch:4},{wch:4}, // A,B,C
+    {wch:5},                 // D: 日付
+    {wch:5},                 // E: 曜日
+    {wch:3},                 // F: 空列
+    ...sl.map(()=>({wch:6})),// スタッフ列
+    {wch:5},                 // 右端曜日
+    {wch:5},                 // 右端日付
   ];
-  const rowH2=[{hpt:60}]; // ヘッダー行（縦書きのため高さ確保）
-  for(let i=0;i<dates.length;i++){rowH2.push({hpt:18});rowH2.push({hpt:18});}
-  ws2["!rows"]=rowH2;
+  // 行高さ: ヘッダー行=120(縦書き用), データ行=18
+  const rowH=[{hpt:120}];
+  for(let i=0;i<dates.length;i++){rowH.push({hpt:18});rowH.push({hpt:18});}
+  ws["!rows"]=rowH;
 
   const wb=XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb,ws2,"シフト一覧");
+  XLSX.utils.book_append_sheet(wb,ws,"シフト一覧");
   const lb=p.label.slice(0,20).replace(/ /g,"_"),t=new Date();
   XLSX.writeFile(wb,`shift_${lb}_${t.getFullYear()}${String(t.getMonth()+1).padStart(2,"0")}${String(t.getDate()).padStart(2,"0")}.xlsx`);
   tt("✅ Excelをダウンロードしました");
