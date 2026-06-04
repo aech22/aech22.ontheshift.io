@@ -1290,8 +1290,8 @@ function expXl(p,subs,staffList,tt,shopName){
 
   // 列インデックス（1-based, A1から開始）
   // A=店舗名(1), B=期間(2), C=日付(3), D=曜日(4), E=空(5), F〜=スタッフ(6〜)
-  const C_SHOP=1, C_PER=2, C_DATE=3, C_WD=4, C_SP=5;
-  const C_STAFF=6;
+  const C_SHOP=1, C_PER=2, C_DATE=3, C_WD=4;
+  const C_STAFF=5; // C列からスタッフ開始（空列なし）
   const C_WD_R=C_STAFF+sl.length;
   const C_DATE_R=C_STAFF+sl.length+1;
   const TOTAL_COLS=C_DATE_R;
@@ -1325,8 +1325,7 @@ function expXl(p,subs,staffList,tt,shopName){
   ws.getColumn(C_PER).width=5;    // B: 期間
   ws.getColumn(C_DATE).width=5;   // C: 日付
   ws.getColumn(C_WD).width=5;     // D: 曜日
-  ws.getColumn(C_SP).width=2;     // E: 空
-  sl.forEach((_,i)=>ws.getColumn(C_STAFF+i).width=6);
+  sl.forEach((_,i)=>ws.getColumn(C_STAFF+i).width=6); // E〜: スタッフ
   ws.getColumn(C_WD_R).width=5;   // 右曜日
   ws.getColumn(C_DATE_R).width=5; // 右日付
 
@@ -1347,7 +1346,6 @@ function expXl(p,subs,staffList,tt,shopName){
   SC(1,C_PER,  periodLabel,  aV, COL_HDR, bAll, {bold:true,size:11});
   SC(1,C_DATE, "",           aV, COL_HDR, bAll, {bold:true,size:11});
   SC(1,C_WD,   "曜日",       aV, COL_HDR, bAll, {bold:true,size:11});
-  SC(1,C_SP,   "",           aH, COL_HDR, bAll);
   sl.forEach((nm,i)=>SC(1,C_STAFF+i, nm, aV, COL_HDR, bAll, {bold:true,size:10}));
   SC(1,C_WD_R,   "曜日",     aV, COL_HDR, bAll, {bold:true,size:11});
   SC(1,C_DATE_R, "",         aV, COL_HDR, bAll, {bold:true,size:11});
@@ -1388,10 +1386,6 @@ function expXl(p,subs,staffList,tt,shopName){
     SC(rT,C_WD,wd,aV,bg,bWdT,{bold:true,size:11,color:{argb:wdColor}});
     SC(rB,C_WD,null,aH,bg,bWdB);
     merges.push({s:{r:rT,c:C_WD},e:{r:rB,c:C_WD}});
-
-    // E列: 空
-    SC(rT,C_SP,null,aH,bg,{top:outerTop,bottom:H,left:T,right:T});
-    SC(rB,C_SP,null,aH,bg,{top:H,bottom:outerBot,left:T,right:T});
 
     // スタッフ列
     sl.forEach((nm,si)=>{
