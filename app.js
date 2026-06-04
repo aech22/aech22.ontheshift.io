@@ -1445,8 +1445,9 @@ function expXl(p,subs,staffList,tt,shopName){
 
   const wb=XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb,ws,"シフト一覧");
-  const lb=p.label.slice(0,20).replace(/ /g,"_"),t=new Date();
-  XLSX.writeFile(wb,`shift_${lb}_${t.getFullYear()}${String(t.getMonth()+1).padStart(2,"0")}${String(t.getDate()).padStart(2,"0")}.xlsx`);
+  const sn=(shopName||"店舗").replace(/[\\/:*?"<>|]/g,"");
+  const pl=p.label.slice(0,20).replace(/[\\/:*?"<>|]/g,"");
+  XLSX.writeFile(wb,`${sn}${pl}.xlsx`);
   tt("✅ Excelをダウンロードしました");
 }
 
