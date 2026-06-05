@@ -106,6 +106,17 @@ function isHoliday(dateStr){
 }
 const DEFAULT_PW="admin1234";
 
+// ===== サブスクリプション プラン定義 =====
+// テスト用: "free"|"standard"|"pro" に設定すると Firebase を無視して上書き
+const DEV_PLAN_OVERRIDE = null; // null = Firebaseから読む
+
+const PLAN_LIMITS = {
+  free:     { shops: 1,        staff: 10, periods: 3        },
+  standard: { shops: 3,        staff: 30, periods: Infinity },
+  pro:      { shops: Infinity, staff: Infinity, periods: Infinity },
+};
+const PLAN_LABELS = { free: "Free", standard: "Standard", pro: "Pro" };
+
 // ===== デフォルト候補時間 =====
 const CAND_WEEKDAY=[
   {start:"10:00",end:"15:00"},{start:"11:00",end:"15:00"},
@@ -266,6 +277,7 @@ function App(){
   const[unbound,setUnbound]=useState(false); // 引き継ぎコード未入力（未所属）状態
   const[inviteCode,setInviteCode]=useState(""); // 引き継ぎコード入力値
   const[inviteError,setInviteError]=useState(""); // エラーメッセージ
+  const[plan,setPlan]=useState("free"); // サブスクプラン
 
   // ===================================================================
   // Phase1: Firebase初期化 → global/shopsをonceで読む → shops/sid確定
@@ -501,6 +513,11 @@ function App(){
       setSubs(arr); ls(storeKey(targetSid,"subs_v6"),arr);
       console.log("subs受信:",arr.length,"件 sid=",targetSid);
     });
+    // accounts/<shopId>/plan（プラン読み込み）
+    on(`accounts/${targetSid}/plan`,val=>{
+      setPlan(DEV_PLAN_OVERRIDE||(val&&["free","standard","pro"].includes(val)?val:"free"));
+    });
+
     // settingsデフォルト書き込み
     firebaseDB.ref(fbPath(targetSid,"settings")).once("value").then(snap=>{
       if(!snap.val()) firebaseDB.ref(fbPath(targetSid,"settings")).set(makeSettings(targetSid));
@@ -724,6 +741,7 @@ function App(){
               currentShopId={sid} saveSettings={saveSettings} savePeriods={savePeriods} saveSubs={saveSubs}
               saveStaff={saveStaff} saveShops={saveShops}
               globalTemplates={globalTemplates} saveGlobalTemplates={saveGlobalTemplates}
+              plan={plan}
               setCurrentShopId={id=>{
                 currentShopIdRef.current=id;
                 setCurrentShopId(id);
@@ -1246,12 +1264,13 @@ function AdminLogin({settings,onAuth}){
 // ============================================================
 // 管理者画面
 // ============================================================
-function AdminView({settings,periods,subs,staffList,shops,currentShopId,saveSettings,savePeriods,saveSubs,saveStaff,saveShops,setCurrentShopId,startSubscriptions,globalTemplates,saveGlobalTemplates,logout,syncStatus}){
+function AdminView({settings,periods,subs,staffList,shops,currentShopId,saveSettings,savePeriods,saveSubs,saveStaff,saveShops,setCurrentShopId,startSubscriptions,globalTemplates,saveGlobalTemplates,logout,syncStatus,plan="free"}){
   const[tab,setTab]=useState(()=>ssGet(SS_TAB,"periods"));
   useEffect(()=>ssSave(SS_TAB,tab),[tab]);
   const[toast,setToast]=useState(null);
   const[shopMenuOpen,setShopMenuOpen]=useState(false);
   const[shopEditMode,setShopEditMode]=useState(false);
+  const[upgradeReason,setUpgradeReason]=useState(null); // {type,limit,plan}
   const tr=useRef();
   const tt=m=>{setToast(m);clearTimeout(tr.current);tr.current=setTimeout(()=>setToast(null),2500);};
   const currentShop=shops.find(s=>s.id===currentShopId)||shops[0];
@@ -1280,7 +1299,11 @@ function AdminView({settings,periods,subs,staffList,shops,currentShopId,saveSett
                       ))}
                       <div style={{borderTop:"1px solid #E5E7EB",padding:"8px 10px",display:"flex",gap:6}}>
                         <button onClick={()=>{setShopEditMode(v=>!v);}} style={{flex:1,padding:"7px",background:"#F0F2F5",border:"none",borderRadius:8,fontSize:12,fontWeight:600,color:"#1A1A2E",cursor:"pointer"}}>⚙️ 店舗編集</button>
-                        <button onClick={()=>{const name=prompt("新しい店舗名を入力");if(!name)return;const ns=makeShop(name.trim());const newShops=[...shops,ns];saveShops(newShops);setCurrentShopId(ns.id);currentShopIdRef.current=ns.id;ssSave(SS_SHOP,ns.id);startSubscriptions(ns.id,newShops);setShopMenuOpen(false);tt("✅ 店舗を追加しました");}} style={{flex:1,padding:"7px",background:"#06C755",border:"none",borderRadius:8,fontSize:12,fontWeight:700,color:"white",cursor:"pointer"}}>＋ 追加</button>
+                        <button onClick={()=>{
+                          const lim=PLAN_LIMITS[plan]?.shops??1;
+                          if(shops.length>=lim){setShopMenuOpen(false);setUpgradeReason({type:"shops",limit:lim,plan});return;}
+                          const name=prompt("新しい店舗名を入力");if(!name)return;const ns=makeShop(name.trim());const newShops=[...shops,ns];saveShops(newShops);setCurrentShopId(ns.id);currentShopIdRef.current=ns.id;ssSave(SS_SHOP,ns.id);startSubscriptions(ns.id,newShops);setShopMenuOpen(false);tt("✅ 店舗を追加しました");
+                        }} style={{flex:1,padding:"7px",background:"#06C755",border:"none",borderRadius:8,fontSize:12,fontWeight:700,color:"white",cursor:"pointer"}}>＋ 追加</button>
                       </div>
                       {shopEditMode&&<div style={{borderTop:"1px solid #E5E7EB",padding:"10px"}}>
                         {shops.map(sh=>(
@@ -1307,24 +1330,29 @@ function AdminView({settings,periods,subs,staffList,shops,currentShopId,saveSett
         </div>
       </div>
       <div style={{maxWidth:900,margin:"0 auto",padding:"20px 14px 60px"}}>
-        {tab==="periods"&&<PeriodsTab periods={periods} subs={subs} staffList={staffList} shops={shops} onSave={savePeriods} tt={tt} shopId={currentShopId} shopName={(shops.find(s=>s.id===currentShopId)||shops[0])?.name}/>}
-        {tab==="staff"&&<StaffTab staffList={staffList} onSave={saveStaff} tt={tt}/>}
-        {tab==="candidates"&&<CandTab settings={settings} onSave={saveSettings} globalTemplates={globalTemplates} saveGlobalTemplates={saveGlobalTemplates} tt={tt}/>}
+        {tab==="periods"&&<PeriodsTab periods={periods} subs={subs} staffList={staffList} shops={shops} onSave={savePeriods} tt={tt} shopId={currentShopId} shopName={(shops.find(s=>s.id===currentShopId)||shops[0])?.name} plan={plan} onUpgrade={setUpgradeReason}/>}
+        {tab==="staff"&&<StaffTab staffList={staffList} onSave={saveStaff} tt={tt} plan={plan} onUpgrade={setUpgradeReason}/>}
+        {tab==="candidates"&&<CandTab settings={settings} onSave={saveSettings} globalTemplates={globalTemplates} saveGlobalTemplates={saveGlobalTemplates} tt={tt} plan={plan}/>}
         {tab==="submissions"&&<SubsTab subs={subs} periods={periods} staffList={staffList} onSave={saveSubs} tt={tt}/>}
-        {tab==="settings"&&<SetTab settings={settings} onSave={saveSettings} subs={subs} saveSubs={saveSubs} tt={tt} syncStatus={syncStatus}/>}
+        {tab==="settings"&&<SetTab settings={settings} onSave={saveSettings} subs={subs} saveSubs={saveSubs} tt={tt} syncStatus={syncStatus} plan={plan}/>}
       </div>
       {toast&&<div style={{position:"fixed",bottom:24,left:"50%",transform:"translateX(-50%)",background:"rgba(255,255,255,.12)",backdropFilter:"blur(10px)",color:"white",padding:"10px 20px",borderRadius:24,fontSize:14,fontWeight:500,zIndex:999,border:"1px solid rgba(255,255,255,.15)"}}>{toast}</div>}
+      {upgradeReason&&<UpgradeModal reason={upgradeReason} currentPlan={plan} onClose={()=>setUpgradeReason(null)}/>}
     </div>
   );
 }
 
 // ===== 期間管理タブ =====
-function PeriodsTab({periods,subs,staffList,shops,onSave,tt,shopId,shopName}){
+function PeriodsTab({periods,subs,staffList,shops,onSave,tt,shopId,shopName,plan="free",onUpgrade}){
   const[eid,setEid]=useState(null);
   const[form,setForm]=useState({label:"",startDate:"",endDate:"",deadlineDate:""});
   const[show,setShow]=useState(false);
   const[usePreset,setUsePreset]=useState(true); // プリセット使用フラグ
   const[viewPeriodId,setViewPeriodId]=useState(null);
+  // Pro限定Excelオプション
+  const[xlShopNameOverride,setXlShopNameOverride]=useState("");
+  const[xlStaffColors,setXlStaffColors]=useState({}); // {staffName: "red"|"black"}
+  const[xlOptPeriodId,setXlOptPeriodId]=useState(null);
 
   // プリセット生成（1ヶ月前除外、今月〜再来月）
   const genPresets=()=>{
@@ -1343,8 +1371,14 @@ function PeriodsTab({periods,subs,staffList,shops,onSave,tt,shopId,shopName}){
   };
   const pre=genPresets();
 
+  const checkPeriodLimit=()=>{
+    const lim=PLAN_LIMITS[plan]?.periods??3;
+    if(periods.length>=lim){onUpgrade&&onUpgrade({type:"periods",limit:lim,plan});return false;}
+    return true;
+  };
   const create=()=>{
     if(!form.startDate||!form.endDate){tt("⚠️ 開始日・終了日を入力");return;}
+    if(!checkPeriodLimit())return;
     const p={id:`p_${Date.now()}`,urlToken:genToken(),shopId,
       label:form.label||`${form.startDate.replace(/-/g,"/")}〜${form.endDate.replace(/-/g,"/")}`,
       startDate:form.startDate,endDate:form.endDate,deadlineDate:form.deadlineDate,
