@@ -155,7 +155,7 @@ const td=new Date(),tds=fd(td);
 function storeKey(shopId,key){return`shift_${shopId}_${key}`;}
 
 // ===== 初期データ =====
-function makeShop(name="店舗1"){return{id:`shop_${Date.now()}`,name,createdAt:new Date().toISOString()};}
+function makeShop(name="店舗1"){return{id:`${genToken()}${genToken()}`,name,createdAt:new Date().toISOString()};} // IDを完全ランダム化
 function makePeriod(shopId){
   const yr=td.getFullYear(),mo=td.getMonth()+1,ms=String(mo).padStart(2,"0");
   return{id:`p_${Date.now()}`,urlToken:genToken(),shopId,label:`${yr}年${mo}月前半`,startDate:`${yr}-${ms}-01`,endDate:`${yr}-${ms}-15`,deadlineDate:"",createdAt:new Date().toISOString()};
@@ -180,16 +180,23 @@ function genToken(){
 function buildUrl(shops,shopId,period){
   if(!period)return "";
   const token=period.urlToken||period.id;
-  return`${window.location.origin}${window.location.pathname}#/${token}`;
+  // スタッフURL: #/s/<token>
+  return`${window.location.origin}${window.location.pathname}#/s/${token}`;
 }
 
 function parseUrl(){
   const h=window.location.hash;
-  if(h.startsWith("#/")){
-    const token=h.slice(2);
-    if(token) return{token};
+  // スタッフURL: #/s/<token>
+  if(h.startsWith("#/s/")){
+    const token=h.slice(4);
+    if(token) return{type:"staff",token};
   }
-  if(h.startsWith("#p="))return{token:h.slice(3)}; // 旧形式互換
+  // 旧形式互換（#/<token> または #p=<token>）→ スタッフとして扱う
+  if(h.startsWith("#/")&&!h.startsWith("#/s/")&&!h.startsWith("#/a/")){
+    const token=h.slice(2);
+    if(token) return{type:"staff",token};
+  }
+  if(h.startsWith("#p="))return{type:"staff",token:h.slice(3)};
   return null;
 }
 
@@ -244,7 +251,7 @@ function App(){
 
   const[shops,setShops]=useState([]);
   // URLにtokenがある場合はsessionStorageを無視してPhase1で確定
-  const _hasUrlToken=!!(parseUrl()?.token);
+  const _hasUrlToken=!!(parseUrl()?.type==="staff");
   const[currentShopId,setCurrentShopId]=useState(()=>_hasUrlToken?null:ssGet(SS_SHOP,null));
   const currentShopIdRef=useRef(_hasUrlToken?null:ssGet(SS_SHOP,null));
   const[view,setView]=useState(()=>_hasUrlToken?"staff":ssGet(SS_VIEW,"staff"));
@@ -314,7 +321,7 @@ function App(){
 
       // URLにtokenがある場合: 全店舗のperiodsを横断検索してshopを特定
       const parsed=parseUrl();
-      if(parsed&&parsed.token){
+      if(parsed&&parsed.token&&parsed.type==="staff"){
         const token=parsed.token;
         Promise.all(
           sh.map(shop=>
@@ -342,21 +349,32 @@ function App(){
             setUrlResolved(true);
             startSubscriptions(matched.shop.id,sh);
           } else {
-            console.warn("token一致なし(Phase1):", token);
-            const savedShopId=ssGet(SS_SHOP,null);
-            const restoredShop=savedShopId?sh.find(s=>s.id===savedShopId):null;
-            const fallback=restoredShop||sh[0];
-            currentShopIdRef.current=fallback.id;
-            setCurrentShopId(fallback.id);
-            startSubscriptions(fallback.id,sh);
+            // tokenがあるがperiodが見つからない → 管理者URLの可能性
+            // Cookieチェックに戻す
+            console.warn("token一致なし(Phase1):", token, "→ Cookieチェックへ");
+            const ckShopId2=getCookie(CK_SHOP);
+            if(ckShopId2){
+              const ckShop2=sh.find(s=>s.id===ckShopId2);
+              const targetId=ckShopId2;
+              currentShopIdRef.current=targetId;
+              setCurrentShopId(targetId);
+              startSubscriptions(targetId,sh);
+            } else {
+              // Cookieもない → 引き継ぎ画面
+              setShops(sh);
+              setUnbound(true);
+            }
           }
           setReady(true);
         }).catch(()=>{
-          const savedShopId=ssGet(SS_SHOP,null);
-          const restoredShop=savedShopId?sh.find(s=>s.id===savedShopId):null;
-          const fallback=restoredShop||sh[0];
-          setCurrentShopId(fallback.id);
-          startSubscriptions(fallback.id,sh);
+          const ckShopId2=getCookie(CK_SHOP);
+          if(ckShopId2){
+            setCurrentShopId(ckShopId2);
+            startSubscriptions(ckShopId2,sh);
+          } else {
+            setShops(sh);
+            setUnbound(true);
+          }
           setReady(true);
         });
       } else {
@@ -1428,7 +1446,15 @@ function PeriodsTab({periods,subs,staffList,shops,onSave,tt,shopId,shopName}){
                 <div style={{marginTop:10,padding:"8px 12px",background:"rgba(255,255,255,.04)",borderRadius:8,display:"flex",alignItems:"center",gap:8}}>
                   <span style={{fontSize:11,color:"rgba(255,255,255,.4)",flexShrink:0}}>🔗 URL</span>
                   <span style={{fontSize:11,color:"rgba(255,255,255,.5)",flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{pUrl}</span>
-                  <button onClick={e=>{e.stopPropagation();navigator.clipboard.writeText(pUrl).then(()=>tt("✅ URLをコピーしました")).catch(()=>tt("URLをコピーできませんでした"));}} style={{padding:"4px 10px",background:"rgba(255,255,255,.1)",border:"none",borderRadius:6,color:"white",fontSize:11,cursor:"pointer",flexShrink:0}}>コピー</button>
+                  <button onClick={e=>{e.stopPropagation();
+              if(navigator.clipboard&&navigator.clipboard.writeText){
+                navigator.clipboard.writeText(pUrl).then(()=>tt("✅ URLをコピーしました")).catch(()=>{
+                  // フォールバック（iOS Safari 12以下等）
+                  const el=document.createElement("textarea");el.value=pUrl;document.body.appendChild(el);el.select();document.execCommand("copy");document.body.removeChild(el);tt("✅ URLをコピーしました");
+                });
+              } else {
+                const el=document.createElement("textarea");el.value=pUrl;document.body.appendChild(el);el.select();document.execCommand("copy");document.body.removeChild(el);tt("✅ URLをコピーしました");
+              }}} style={{padding:"4px 10px",background:"rgba(255,255,255,.1)",border:"none",borderRadius:6,color:"white",fontSize:11,cursor:"pointer",flexShrink:0}}>コピー</button>
                 </div>
               </>
             }
@@ -2022,7 +2048,12 @@ function SetTab({settings,onSave,subs,saveSubs,tt,syncStatus}){
       <AL>この端末のCookie（店舗ID）</AL>
       <div style={{display:"flex",gap:8,marginBottom:12,alignItems:"center"}}>
         <input readOnly value={getCookie(CK_SHOP)||"（未設定）"} style={{...AI,flex:1,fontSize:11,fontFamily:"monospace"}}/>
-        <button onClick={()=>{const v=getCookie(CK_SHOP);if(v)navigator.clipboard.writeText(v).then(()=>tt("✅ コピーしました"));}} style={AB}>コピー</button>
+        <button onClick={()=>{const v=getCookie(CK_SHOP);if(!v)return;
+          if(navigator.clipboard&&navigator.clipboard.writeText){
+            navigator.clipboard.writeText(v).then(()=>tt("✅ コピーしました")).catch(()=>{const el=document.createElement("textarea");el.value=v;document.body.appendChild(el);el.select();document.execCommand("copy");document.body.removeChild(el);tt("✅ コピーしました");});
+          } else {
+            const el=document.createElement("textarea");el.value=v;document.body.appendChild(el);el.select();document.execCommand("copy");document.body.removeChild(el);tt("✅ コピーしました");
+          }}} style={AB}>コピー</button>
       </div>
       <AL>招待コード（別の店舗に切り替え）</AL>
       <div style={{display:"flex",gap:8,marginBottom:12}}>
