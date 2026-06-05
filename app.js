@@ -360,21 +360,22 @@ function App(){
           setReady(true);
         });
       } else {
-        // URLなし: Cookie優先 → 該当shop存在すればそれを使う
+        // URLなし: Cookieを最優先で確認
         const ckShopId=getCookie(CK_SHOP);
-        const cookieShop=ckShopId?sh.find(s=>s.id===ckShopId):null;
-        if(cookieShop){
-          // Cookieの店舗が存在する → その店舗を使用
-          console.log("Cookie店舗:", cookieShop.name);
-          currentShopIdRef.current=cookieShop.id;
-          setCurrentShopId(cookieShop.id);
-          startSubscriptions(cookieShop.id,sh);
+        if(ckShopId){
+          // Cookieにshopがある → FirebaseになくてもCookieを信頼して使用
+          const cookieShop=sh.find(s=>s.id===ckShopId);
+          const targetId=ckShopId;
+          console.log("Cookie店舗:", cookieShop?.name||targetId);
+          currentShopIdRef.current=targetId;
+          setCurrentShopId(targetId);
+          startSubscriptions(targetId,sh);
           setReady(true);
         } else {
-          // Cookieなし or 無効 → 「未所属」状態でreadyに（引き継ぎコード入力待ち）
+          // Cookieなし → 引き継ぎコード入力画面を表示
           console.log("Cookie未設定: 引き継ぎコード入力待ち");
           setShops(sh);
-          setUnbound(true); // 未所属フラグ
+          setUnbound(true);
           setReady(true);
         }
       }
