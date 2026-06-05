@@ -641,31 +641,26 @@ function App(){
           <button onClick={()=>{
             if(!firebaseDB){setInviteError("Firebase未接続");return;}
             setInviteError("確認中...");
+            // 既存shopがあっても新規作成可能（Cookieなし端末は常に新規登録できる）
             firebaseDB.ref("global/shops").once("value").then(snap=>{
               const val=snap.val();
               const sh=val?(typeof val==="object"&&!Array.isArray(val)
                 ?Object.values(val).filter(s=>s&&s.id)
                 :(Array.isArray(val)?val:Object.values(val)).filter(s=>s&&s.id)):[];
-              if(sh.length>0){
-                // 既存shopがある → 追加せず最初の1件を使う
-                setInviteError("⚠️ 既に店舗が登録されています。引き継ぎコードを入力してください。");
-                setShops(sh);
-                return;
-              }
-              // 店舗が1件もない場合のみ新規作成
-              const newShop=makeShop("メイン店舗");
-              const obj={[newShop.id]:newShop};
+              const newShop=makeShop("新しい店舗");
+              const newShops=[...sh,newShop];
+              const obj={};newShops.forEach(s=>{if(s&&s.id)obj[s.id]=s;});
               firebaseDB.ref("global/shops").set(obj);
               setCookie(CK_SHOP,newShop.id,365);
-              setShops([newShop]);
+              setShops(newShops);
               currentShopIdRef.current=newShop.id;
               setCurrentShopId(newShop.id);
-              startSubscriptions(newShop.id,[newShop]);
+              startSubscriptions(newShop.id,newShops);
               setUnbound(false);
               setInviteError("");
             }).catch(()=>setInviteError("エラーが発生しました。再試行してください。"));
           }} style={{background:"none",border:"none",color:"rgba(255,255,255,.4)",fontSize:13,cursor:"pointer",textDecoration:"underline"}}>
-            初めて使う（新規店舗を登録）
+            新規店舗を作成する
           </button>
         </div>
       </div>
