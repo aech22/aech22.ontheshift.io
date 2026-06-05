@@ -664,7 +664,7 @@ function App(){
               setInviteError("");
             }).catch(()=>setInviteError("エラーが発生しました。再試行してください。"));
           }} style={{background:"none",border:"none",color:"rgba(255,255,255,.4)",fontSize:13,cursor:"pointer",textDecoration:"underline"}}>
-            初めて使う（店舗を新規登録）
+            初めて使う（新規店舗を登録）
           </button>
         </div>
       </div>
@@ -799,9 +799,21 @@ function StaffView({periods,ap,apid,setApid,shopId,settings,subs,staffList,onSub
   const isClosed=ds=>gc(ds).some(c=>c.closed);
 
   const submit=()=>{
-    const sub={id:Date.now().toString(),periodId:apid,staffName:name.trim(),submittedAt:new Date().toISOString(),shifts:Object.fromEntries(dates.map(d=>[d,sd[d]||{status:"holiday"}])),comment:comment.trim()};
+    const staffName=name.trim();
+    // 既存subを検索（同じperiod+名前 → 上書き）
+    const existSub=subs.find(s=>s.staffName===staffName&&s.periodId===apid);
+    const sub={
+      id:existSub?existSub.id:Date.now().toString(), // 既存なら同じID（上書き）
+      periodId:apid,
+      staffName,
+      submittedAt:existSub?existSub.submittedAt:new Date().toISOString(), // 初回提出日は維持
+      updatedAt:existSub?new Date().toISOString():undefined, // 再提出なら更新日時
+      isUpdated:existSub?true:undefined,
+      shifts:Object.fromEntries(dates.map(d=>[d,sd[d]||{status:"holiday"}])),
+      comment:comment.trim()
+    };
     // スタッフ名をCookieに保存（1年間）
-    if(shopId&&apid) setCookie(ckStaffKey(shopId,apid),name.trim(),365);
+    if(shopId&&apid) setCookie(ckStaffKey(shopId,apid),staffName,365);
     onSub(sub);setDone(true);setConf(false);
   };
 
@@ -2016,8 +2028,8 @@ function SetTab({settings,onSave,subs,saveSubs,tt,syncStatus}){
         <input readOnly value={getCookie(CK_SHOP)||"（未設定）"} style={{...AI,flex:1,fontSize:11,fontFamily:"monospace"}}/>
         <button onClick={()=>{const v=getCookie(CK_SHOP);if(v)navigator.clipboard.writeText(v).then(()=>tt("✅ コピーしました"));}} style={AB}>コピー</button>
       </div>
-      <AL>別端末の招待コード（別端末の店舗IDを入力）</AL>
-      <div style={{display:"flex",gap:8}}>
+      <AL>招待コード（別の店舗に切り替え）</AL>
+      <div style={{display:"flex",gap:8,marginBottom:12}}>
         <input value={inviteInput} onChange={e=>setInviteInput(e.target.value)} placeholder="別端末の店舗IDを貼り付け" style={{...AI,flex:1}}/>
         <button onClick={()=>{
           if(!inviteInput.trim()){tt("⚠️ 招待コードを入力");return;}
@@ -2025,18 +2037,32 @@ function SetTab({settings,onSave,subs,saveSubs,tt,syncStatus}){
           if(!firebaseDB){tt("⚠️ Firebase未接続");return;}
           firebaseDB.ref("global/shops").once("value").then(snap=>{
             const val=snap.val();
-            const sh=val?(typeof val==="object"&&!Array.isArray(val)?Object.values(val):val):[];
-            const found=Array.isArray(sh)?sh.find(s=>s&&s.id===code):null;
+            const sh=val?(typeof val==="object"&&!Array.isArray(val)?Object.values(val).filter(s=>s&&s.id):[]):[];
+            const found=sh.find(s=>s&&s.id===code);
             if(found){
               setCookie(CK_SHOP,code,365);
-              tt(`✅「${found.name}」に紐付けました。ページをリロードしてください。`);
+              tt(`✅「${found.name}」に切り替えました。ページをリロードしてください。`);
               setInviteInput("");
             } else {
               tt("❌ 該当する店舗が見つかりません");
             }
           }).catch(()=>tt("❌ 確認に失敗しました"));
-        }} style={AB}>適用</button>
+        }} style={AB}>切り替え</button>
       </div>
+      <button onClick={()=>{
+        if(!firebaseDB){tt("⚠️ Firebase未接続");return;}
+        if(!confirm("新規店舗を作成してこの端末に紐付けます。よろしいですか？"))return;
+        const newShop=makeShop("新しい店舗");
+        firebaseDB.ref("global/shops").once("value").then(snap=>{
+          const val=snap.val();
+          const sh=val?(typeof val==="object"&&!Array.isArray(val)?Object.values(val).filter(s=>s&&s.id):[]):[];
+          const newShops=[...sh,newShop];
+          const obj={};newShops.forEach(s=>{if(s&&s.id)obj[s.id]=s;});
+          firebaseDB.ref("global/shops").set(obj);
+          setCookie(CK_SHOP,newShop.id,365);
+          tt("✅ 新規店舗を作成しました。ページをリロードしてください。");
+        });
+      }} style={{...AGray,width:"100%",fontSize:13}}>＋ 新規店舗を作成してこの端末に紐付け</button>
     </AC>
 
   </div>);
