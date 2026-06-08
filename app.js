@@ -177,6 +177,11 @@ function genToken(){
   return t;
 }
 
+// スタッフデータヘルパー（文字列/オブジェクト両対応）
+const sName=s=>typeof s==="string"?s:s?.name||"";
+const sColor=s=>typeof s==="string"?"black":s?.color||"black";
+const sObj=(name,color)=>({name,color:color||"black"});
+
 function buildUrl(shops,shopId,period){
   if(!period)return "";
   const token=period.urlToken||period.id;
@@ -1713,11 +1718,6 @@ function expXl(p,subs,staffList,tt,shopName){
     tt("❌ Excel生成に失敗しました: "+e.message);
   });
 }
-
-// スタッフデータヘルパー（文字列/オブジェクト両対応）
-const sName=s=>typeof s==="string"?s:s?.name||"";
-const sColor=s=>typeof s==="string"?"black":s?.color||"black";
-const sObj=(name,color)=>({name,color:color||"black"});
 
 // ===== スタッフ登録タブ =====
 function StaffTab({staffList,onSave,subs=[],saveSubs,periods=[],tt}){
