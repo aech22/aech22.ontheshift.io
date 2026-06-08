@@ -1216,12 +1216,56 @@ function SmModal({subs,periods,apid,onClose,staffList,onEditSub,onEditByName}){
           onClose={()=>setEditTarget(null)}
         />;
       })()}
-      {notSubmitted.length>0&&<div style={{background:"white",borderTop:"1px solid #E5E7EB",padding:"10px 16px",flexShrink:0}}>
-        <div style={{fontSize:12,fontWeight:700,color:"#9CA3AF",marginBottom:6}}>📋 未提出（{notSubmitted.length}名）</div>
-        <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-          {notSubmitted.map((n,i)=><span key={i} style={{fontSize:12,background:"#FFF0F1",color:"#FF4757",border:"1px solid rgba(255,71,87,.2)",padding:"3px 10px",borderRadius:20,fontWeight:600}}>{n}</span>)}
-        </div>
-      </div>}
+      {/* 未提出・未登録まとめ表示 */}
+      {(()=>{
+        const registeredNames=staffList.map(s=>sName(s));
+        // 提出あり・スタッフ未登録の名前
+        const unlinked=submittedNames.filter(n=>!registeredNames.includes(n));
+        return(<>
+          {notSubmitted.length>0&&<div style={{background:"white",borderTop:"1px solid #E5E7EB",padding:"10px 16px",flexShrink:0}}>
+            <div style={{fontSize:12,fontWeight:700,color:"#9CA3AF",marginBottom:6}}>📋 未提出（{notSubmitted.length}名）</div>
+            <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+              {notSubmitted.map((n,i)=><span key={i} style={{fontSize:12,background:"#FFF0F1",color:"#FF4757",border:"1px solid rgba(255,71,87,.2)",padding:"3px 10px",borderRadius:20,fontWeight:600}}>{sName(n)}</span>)}
+            </div>
+          </div>}
+          {unlinked.length>0&&<div style={{background:"#FFFBEB",borderTop:"1px solid #FCD34D",padding:"10px 16px",flexShrink:0}}>
+            <div style={{fontSize:12,fontWeight:700,color:"#92400E",marginBottom:6}}>⚠️ スタッフ未登録（{unlinked.length}名）— タップしてスタッフと紐付け</div>
+            <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+              {unlinked.map((n,i)=>(
+                <button key={i} onClick={()=>{
+                  // 登録スタッフ一覧から選択するダイアログ
+                  const names=registeredNames;
+                  if(names.length===0){alert("先にスタッフを登録してください");return;}
+                  const choice=window.confirm(`「${n}」を登録スタッフに紐付けますか？
+
+OK→スタッフを選択
+キャンセル→スキップ`);
+                  if(!choice)return;
+                  // 選択リストを表示（prompt）
+                  const idx=window.prompt(
+                    `「${n}」をどのスタッフに紐付けますか？
+
+${names.map((name,i)=>`${i+1}: ${name}`).join("
+")}
+
+番号を入力してください`
+                  );
+                  const num=parseInt(idx);
+                  if(isNaN(num)||num<1||num>names.length){return;}
+                  const targetName=names[num-1];
+                  // 該当するsubsのstaffNameを変更
+                  const toUpdate=submitted.filter(s=>s.staffName===n);
+                  toUpdate.forEach(sub=>{onEditSub({...sub,staffName:targetName,updatedAt:new Date().toISOString(),isUpdated:true});});
+                  alert(`✅ 「${n}」→「${targetName}」に紐付けました`);
+                }}
+                style={{fontSize:12,background:"#FEF3C7",color:"#92400E",border:"1px solid #FCD34D",padding:"4px 12px",borderRadius:20,fontWeight:600,cursor:"pointer"}}>
+                  {n} 🔗
+                </button>
+              ))}
+            </div>
+          </div>}
+        </>);
+      })()}
     </div>
   );
 }
@@ -1312,7 +1356,7 @@ function AdminView({settings,periods,subs,staffList,shops,currentShopId,saveSett
       </div>
       <div style={{maxWidth:900,margin:"0 auto",padding:"20px 14px 60px"}}>
         {tab==="periods"&&<PeriodsTab periods={periods} subs={subs} staffList={staffList} shops={shops} onSave={savePeriods} tt={tt} shopId={currentShopId} shopName={(shops.find(s=>s.id===currentShopId)||shops[0])?.name}/>}
-        {tab==="staff"&&<StaffTab staffList={staffList} onSave={saveStaff} tt={tt}/>}
+        {tab==="staff"&&<StaffTab staffList={staffList} onSave={saveStaff} subs={subs} saveSubs={saveSubs} periods={periods} tt={tt}/>}
         {tab==="candidates"&&<CandTab settings={settings} onSave={saveSettings} globalTemplates={globalTemplates} saveGlobalTemplates={saveGlobalTemplates} tt={tt}/>}
         {tab==="submissions"&&<SubsTab subs={subs} periods={periods} staffList={staffList} onSave={saveSubs} tt={tt}/>}
         {tab==="settings"&&<SetTab settings={settings} onSave={saveSettings} subs={subs} saveSubs={saveSubs} tt={tt} syncStatus={syncStatus}/>}
@@ -1676,7 +1720,7 @@ const sColor=s=>typeof s==="string"?"black":s?.color||"black";
 const sObj=(name,color)=>({name,color:color||"black"});
 
 // ===== スタッフ登録タブ =====
-function StaffTab({staffList,onSave,tt}){
+function StaffTab({staffList,onSave,subs=[],saveSubs,periods=[],tt}){
   const[newName,setNewName]=useState("");
   const add=()=>{
     if(!newName.trim()){tt("⚠️ 名前を入力");return;}
@@ -1722,6 +1766,67 @@ function StaffTab({staffList,onSave,tt}){
         </div>
         <div style={{fontSize:11,color:"rgba(255,255,255,.3)",marginTop:8}}>● をタップすると名前の色を黒/赤で切り替えられます（Excel出力に反映）</div>
       </AC>
+
+      {/* 未登録提出者のリンク */}
+      {(()=>{
+        const registeredNames=staffList.map(s=>sName(s));
+        const allSubmittedNames=[...new Set(subs.map(s=>s.staffName))];
+        const unlinked=allSubmittedNames.filter(n=>!registeredNames.includes(n));
+        if(unlinked.length===0)return null;
+        return(
+          <AC title="⚠️ スタッフ未登録（提出あり）">
+            <div style={{fontSize:12,color:"rgba(255,255,255,.5)",marginBottom:10,lineHeight:1.6}}>
+              提出データにあるが、スタッフ一覧に未登録の名前です。<br/>
+              タップして登録スタッフと紐付けるか、新規登録できます。
+            </div>
+            {unlinked.map((n,i)=>(
+              <div key={i} style={{display:"flex",alignItems:"center",gap:8,padding:"10px 12px",background:"rgba(253,211,77,.08)",border:"1px solid rgba(253,211,77,.2)",borderRadius:10,marginBottom:6}}>
+                <span style={{flex:1,fontSize:14,color:"#FCD34D",fontWeight:600}}>{n}</span>
+                <button onClick={()=>{
+                  // 登録スタッフ一覧から選択
+                  const names=registeredNames;
+                  if(names.length===0){
+                    // 登録スタッフがいない場合は新規登録
+                    if(window.confirm(`「${n}」をスタッフとして新規登録しますか？`)){
+                      onSave([...staffList,sObj(n,"black")]);
+                      tt(`✅「${n}」を登録しました`);
+                    }
+                    return;
+                  }
+                  const idx=window.prompt(
+                    `「${n}」をどのスタッフに紐付けますか？
+
+${names.map((name,j)=>`${j+1}: ${name}`).join("
+")}
+${names.length+1}: 新規スタッフとして登録
+
+番号を入力`
+                  );
+                  const num=parseInt(idx);
+                  if(isNaN(num)||num<1||num>names.length+1)return;
+                  if(num===names.length+1){
+                    // 新規登録
+                    onSave([...staffList,sObj(n,"black")]);
+                    tt(`✅「${n}」をスタッフとして登録しました`);
+                    return;
+                  }
+                  const targetName=names[num-1];
+                  // subsのstaffNameを一括変更
+                  const newSubs=subs.map(s=>s.staffName===n?{...s,staffName:targetName,updatedAt:new Date().toISOString(),isUpdated:true}:s);
+                  saveSubs(newSubs);
+                  tt(`✅「${n}」→「${targetName}」に紐付けました`);
+                }} style={{padding:"6px 12px",background:"rgba(253,211,77,.15)",border:"1px solid rgba(253,211,77,.3)",borderRadius:8,color:"#FCD34D",fontSize:12,fontWeight:700,cursor:"pointer"}}>🔗 紐付け</button>
+                <button onClick={()=>{
+                  if(window.confirm(`「${n}」をスタッフとして新規登録しますか？`)){
+                    onSave([...staffList,sObj(n,"black")]);
+                    tt(`✅「${n}」を登録しました`);
+                  }
+                }} style={{padding:"6px 12px",background:"rgba(255,255,255,.08)",border:"none",borderRadius:8,color:"rgba(255,255,255,.6)",fontSize:12,cursor:"pointer"}}>＋ 新規登録</button>
+              </div>
+            ))}
+          </AC>
+        );
+      })()}
     </div>
   );
 }
