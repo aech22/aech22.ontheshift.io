@@ -106,17 +106,6 @@ function isHoliday(dateStr){
 }
 const DEFAULT_PW="admin1234";
 
-// ===== サブスクリプション プラン定義 =====
-// テスト用: "free"|"standard"|"pro" に設定すると Firebase を無視して上書き
-const DEV_PLAN_OVERRIDE = null; // null = Firebaseから読む
-
-const PLAN_LIMITS = {
-  free:     { shops: 1,        staff: 10, periods: 3        },
-  standard: { shops: 3,        staff: 30, periods: Infinity },
-  pro:      { shops: Infinity, staff: Infinity, periods: Infinity },
-};
-const PLAN_LABELS = { free: "Free", standard: "Standard", pro: "Pro" };
-
 // ===== デフォルト候補時間 =====
 const CAND_WEEKDAY=[
   {start:"10:00",end:"15:00"},{start:"11:00",end:"15:00"},
@@ -277,7 +266,6 @@ function App(){
   const[unbound,setUnbound]=useState(false); // 引き継ぎコード未入力（未所属）状態
   const[inviteCode,setInviteCode]=useState(""); // 引き継ぎコード入力値
   const[inviteError,setInviteError]=useState(""); // エラーメッセージ
-  const[plan,setPlan]=useState("free"); // サブスクプラン
 
   // ===================================================================
   // Phase1: Firebase初期化 → global/shopsをonceで読む → shops/sid確定
@@ -497,9 +485,13 @@ function App(){
     // staff
     on(fbPath(targetSid,"staff"),val=>{
       if(!val){ setStaffList([]); return; }
-      const arr=Array.isArray(val)
-        ?val.filter(s=>s&&typeof s==="string")
-        :typeof val==="object"?Object.values(val).filter(s=>s&&typeof s==="string"):[];
+      // 文字列配列（旧形式）とオブジェクト配列（新形式）両対応
+      let arr;
+      if(Array.isArray(val)){
+        arr=val.filter(s=>s&&(typeof s==="string"||typeof s==="object"));
+      } else if(typeof val==="object"){
+        arr=Object.values(val).filter(s=>s&&(typeof s==="string"||typeof s==="object"));
+      } else { arr=[]; }
       setStaffList(arr); ls(storeKey(targetSid,"staff_v6"),arr);
     });
     // subs
@@ -513,11 +505,6 @@ function App(){
       setSubs(arr); ls(storeKey(targetSid,"subs_v6"),arr);
       console.log("subs受信:",arr.length,"件 sid=",targetSid);
     });
-    // accounts/<shopId>/plan（プラン読み込み）
-    on(`accounts/${targetSid}/plan`,val=>{
-      setPlan(DEV_PLAN_OVERRIDE||(val&&["free","standard","pro"].includes(val)?val:"free"));
-    });
-
     // settingsデフォルト書き込み
     firebaseDB.ref(fbPath(targetSid,"settings")).once("value").then(snap=>{
       if(!snap.val()) firebaseDB.ref(fbPath(targetSid,"settings")).set(makeSettings(targetSid));
@@ -741,7 +728,6 @@ function App(){
               currentShopId={sid} saveSettings={saveSettings} savePeriods={savePeriods} saveSubs={saveSubs}
               saveStaff={saveStaff} saveShops={saveShops}
               globalTemplates={globalTemplates} saveGlobalTemplates={saveGlobalTemplates}
-              plan={plan}
               setCurrentShopId={id=>{
                 currentShopIdRef.current=id;
                 setCurrentShopId(id);
@@ -1264,13 +1250,12 @@ function AdminLogin({settings,onAuth}){
 // ============================================================
 // 管理者画面
 // ============================================================
-function AdminView({settings,periods,subs,staffList,shops,currentShopId,saveSettings,savePeriods,saveSubs,saveStaff,saveShops,setCurrentShopId,startSubscriptions,globalTemplates,saveGlobalTemplates,logout,syncStatus,plan="free"}){
+function AdminView({settings,periods,subs,staffList,shops,currentShopId,saveSettings,savePeriods,saveSubs,saveStaff,saveShops,setCurrentShopId,startSubscriptions,globalTemplates,saveGlobalTemplates,logout,syncStatus}){
   const[tab,setTab]=useState(()=>ssGet(SS_TAB,"periods"));
   useEffect(()=>ssSave(SS_TAB,tab),[tab]);
   const[toast,setToast]=useState(null);
   const[shopMenuOpen,setShopMenuOpen]=useState(false);
   const[shopEditMode,setShopEditMode]=useState(false);
-  const[upgradeReason,setUpgradeReason]=useState(null); // {type,limit,plan}
   const tr=useRef();
   const tt=m=>{setToast(m);clearTimeout(tr.current);tr.current=setTimeout(()=>setToast(null),2500);};
   const currentShop=shops.find(s=>s.id===currentShopId)||shops[0];
@@ -1299,11 +1284,7 @@ function AdminView({settings,periods,subs,staffList,shops,currentShopId,saveSett
                       ))}
                       <div style={{borderTop:"1px solid #E5E7EB",padding:"8px 10px",display:"flex",gap:6}}>
                         <button onClick={()=>{setShopEditMode(v=>!v);}} style={{flex:1,padding:"7px",background:"#F0F2F5",border:"none",borderRadius:8,fontSize:12,fontWeight:600,color:"#1A1A2E",cursor:"pointer"}}>⚙️ 店舗編集</button>
-                        <button onClick={()=>{
-                          const lim=PLAN_LIMITS[plan]?.shops??1;
-                          if(shops.length>=lim){setShopMenuOpen(false);setUpgradeReason({type:"shops",limit:lim,plan});return;}
-                          const name=prompt("新しい店舗名を入力");if(!name)return;const ns=makeShop(name.trim());const newShops=[...shops,ns];saveShops(newShops);setCurrentShopId(ns.id);currentShopIdRef.current=ns.id;ssSave(SS_SHOP,ns.id);startSubscriptions(ns.id,newShops);setShopMenuOpen(false);tt("✅ 店舗を追加しました");
-                        }} style={{flex:1,padding:"7px",background:"#06C755",border:"none",borderRadius:8,fontSize:12,fontWeight:700,color:"white",cursor:"pointer"}}>＋ 追加</button>
+                        <button onClick={()=>{const name=prompt("新しい店舗名を入力");if(!name)return;const ns=makeShop(name.trim());const newShops=[...shops,ns];saveShops(newShops);setCurrentShopId(ns.id);currentShopIdRef.current=ns.id;ssSave(SS_SHOP,ns.id);startSubscriptions(ns.id,newShops);setShopMenuOpen(false);tt("✅ 店舗を追加しました");}} style={{flex:1,padding:"7px",background:"#06C755",border:"none",borderRadius:8,fontSize:12,fontWeight:700,color:"white",cursor:"pointer"}}>＋ 追加</button>
                       </div>
                       {shopEditMode&&<div style={{borderTop:"1px solid #E5E7EB",padding:"10px"}}>
                         {shops.map(sh=>(
@@ -1330,29 +1311,24 @@ function AdminView({settings,periods,subs,staffList,shops,currentShopId,saveSett
         </div>
       </div>
       <div style={{maxWidth:900,margin:"0 auto",padding:"20px 14px 60px"}}>
-        {tab==="periods"&&<PeriodsTab periods={periods} subs={subs} staffList={staffList} shops={shops} onSave={savePeriods} tt={tt} shopId={currentShopId} shopName={(shops.find(s=>s.id===currentShopId)||shops[0])?.name} plan={plan} onUpgrade={setUpgradeReason}/>}
-        {tab==="staff"&&<StaffTab staffList={staffList} onSave={saveStaff} tt={tt} plan={plan} onUpgrade={setUpgradeReason}/>}
-        {tab==="candidates"&&<CandTab settings={settings} onSave={saveSettings} globalTemplates={globalTemplates} saveGlobalTemplates={saveGlobalTemplates} tt={tt} plan={plan}/>}
+        {tab==="periods"&&<PeriodsTab periods={periods} subs={subs} staffList={staffList} shops={shops} onSave={savePeriods} tt={tt} shopId={currentShopId} shopName={(shops.find(s=>s.id===currentShopId)||shops[0])?.name}/>}
+        {tab==="staff"&&<StaffTab staffList={staffList} onSave={saveStaff} tt={tt}/>}
+        {tab==="candidates"&&<CandTab settings={settings} onSave={saveSettings} globalTemplates={globalTemplates} saveGlobalTemplates={saveGlobalTemplates} tt={tt}/>}
         {tab==="submissions"&&<SubsTab subs={subs} periods={periods} staffList={staffList} onSave={saveSubs} tt={tt}/>}
-        {tab==="settings"&&<SetTab settings={settings} onSave={saveSettings} subs={subs} saveSubs={saveSubs} tt={tt} syncStatus={syncStatus} plan={plan}/>}
+        {tab==="settings"&&<SetTab settings={settings} onSave={saveSettings} subs={subs} saveSubs={saveSubs} tt={tt} syncStatus={syncStatus}/>}
       </div>
       {toast&&<div style={{position:"fixed",bottom:24,left:"50%",transform:"translateX(-50%)",background:"rgba(255,255,255,.12)",backdropFilter:"blur(10px)",color:"white",padding:"10px 20px",borderRadius:24,fontSize:14,fontWeight:500,zIndex:999,border:"1px solid rgba(255,255,255,.15)"}}>{toast}</div>}
-      {upgradeReason&&<UpgradeModal reason={upgradeReason} currentPlan={plan} onClose={()=>setUpgradeReason(null)}/>}
     </div>
   );
 }
 
 // ===== 期間管理タブ =====
-function PeriodsTab({periods,subs,staffList,shops,onSave,tt,shopId,shopName,plan="free",onUpgrade}){
+function PeriodsTab({periods,subs,staffList,shops,onSave,tt,shopId,shopName}){
   const[eid,setEid]=useState(null);
   const[form,setForm]=useState({label:"",startDate:"",endDate:"",deadlineDate:""});
   const[show,setShow]=useState(false);
   const[usePreset,setUsePreset]=useState(true); // プリセット使用フラグ
   const[viewPeriodId,setViewPeriodId]=useState(null);
-  // Pro限定Excelオプション
-  const[xlShopNameOverride,setXlShopNameOverride]=useState("");
-  const[xlStaffColors,setXlStaffColors]=useState({}); // {staffName: "red"|"black"}
-  const[xlOptPeriodId,setXlOptPeriodId]=useState(null);
 
   // プリセット生成（1ヶ月前除外、今月〜再来月）
   const genPresets=()=>{
@@ -1371,14 +1347,8 @@ function PeriodsTab({periods,subs,staffList,shops,onSave,tt,shopId,shopName,plan
   };
   const pre=genPresets();
 
-  const checkPeriodLimit=()=>{
-    const lim=PLAN_LIMITS[plan]?.periods??3;
-    if(periods.length>=lim){onUpgrade&&onUpgrade({type:"periods",limit:lim,plan});return false;}
-    return true;
-  };
   const create=()=>{
     if(!form.startDate||!form.endDate){tt("⚠️ 開始日・終了日を入力");return;}
-    if(!checkPeriodLimit())return;
     const p={id:`p_${Date.now()}`,urlToken:genToken(),shopId,
       label:form.label||`${form.startDate.replace(/-/g,"/")}〜${form.endDate.replace(/-/g,"/")}`,
       startDate:form.startDate,endDate:form.endDate,deadlineDate:form.deadlineDate,
@@ -1517,9 +1487,18 @@ function expXl(p,subs,staffList,tt,shopName){
   const ss=subs.filter(s=>s.periodId===p.id);
   if(typeof ExcelJS==="undefined"){tt("⚠️ ExcelJS未読込み");return;}
   const dates=gd(p.startDate,p.endDate);
+  // staffListはオブジェクト or 文字列配列 → sNameで正規化
   const submittedNames=ss.map(s=>s.staffName);
-  const registeredOrder=staffList.filter(n=>submittedNames.includes(n));
-  const unregistered=submittedNames.filter(n=>!registeredOrder.includes(n)).sort((a,b)=>a.localeCompare(b,"ja"));
+  // 登録スタッフ全員を含む（未提出者は全日程を休みとして出力）
+  const registeredOrder=staffList.length>0
+    ? staffList  // 登録スタッフ順で全員含める（オブジェクト形式も対応）
+    : [];
+  // 登録スタッフに含まれない提出者（未登録スタッフ）を末尾に追加（文字列で追加）
+  const registeredNames=registeredOrder.map(s=>sName(s));
+  const unregistered=submittedNames
+    .filter(n=>!registeredNames.includes(n))
+    .sort((a,b)=>a.localeCompare(b,"ja"))
+    .map(n=>sObj(n,"black")); // 未登録スタッフは黒
   const sl=[...registeredOrder,...unregistered];
   if(sl.length===0){tt("⚠️ 提出データがありません");return;}
 
@@ -1610,11 +1589,12 @@ function expXl(p,subs,staffList,tt,shopName){
   // B1: 曜日ヘッダー (top/bot/right:medium, left:thin)
   SC(1,C_WD_H,"曜日",aV,fNone,{top:M,bottom:M,left:T,right:M},{bold:true,size:11});
   // スタッフ列: top:medium, right:thin（左枠なし）
-  sl.forEach((nm,i)=>{
+  sl.forEach((staffObj,i)=>{
+    const nm=sName(staffObj),col=sColor(staffObj);
     const isFirst=i===0;
     SC(1,C_STAFF+i,nm,aV,fNone,
       {top:M,bottom:M,left:isFirst?T:undefined,right:T},
-      {bold:true,size:10});
+      {bold:true,size:10,color:{argb:col==="red"?"FFFF4757":"FF000000"}});
   });
   // 右端曜日: top/bot/left:medium, right:thin
   SC(1,C_WD_R,"曜日",aV,fNone,{top:M,bottom:M,left:M,right:T},{bold:true,size:11});
@@ -1642,7 +1622,8 @@ function expXl(p,subs,staffList,tt,shopName){
     ws.mergeCells(rT,C_WD_H,rB,C_WD_H);
 
     // スタッフ列
-    sl.forEach((nm,si)=>{
+    sl.forEach((staffObj,si)=>{
+      const nm=sName(staffObj),col=sColor(staffObj);
       const sub=ss.find(s=>s.staffName===nm),sh=sub?.shifts?.[ds];
       const isWork=sh&&sh.status==="work";
       const ci=C_STAFF+si;
@@ -1689,31 +1670,57 @@ function expXl(p,subs,staffList,tt,shopName){
   });
 }
 
+// スタッフデータヘルパー（文字列/オブジェクト両対応）
+const sName=s=>typeof s==="string"?s:s?.name||"";
+const sColor=s=>typeof s==="string"?"black":s?.color||"black";
+const sObj=(name,color)=>({name,color:color||"black"});
+
 // ===== スタッフ登録タブ =====
 function StaffTab({staffList,onSave,tt}){
   const[newName,setNewName]=useState("");
-  const add=()=>{if(!newName.trim()){tt("⚠️ 名前を入力");return;}if(staffList.includes(newName.trim())){tt("⚠️ 既に登録されています");return;}onSave([...staffList,newName.trim()]);setNewName("");tt(`✅ ${newName.trim()} を追加しました`);};
+  const add=()=>{
+    if(!newName.trim()){tt("⚠️ 名前を入力");return;}
+    if(staffList.some(s=>sName(s)===newName.trim())){tt("⚠️ 既に登録されています");return;}
+    onSave([...staffList,sObj(newName.trim(),"black")]);
+    setNewName("");tt(`✅ ${newName.trim()} を追加しました`);
+  };
   const del=i=>{const a=[...staffList];a.splice(i,1);onSave(a);tt("🗑️ 削除しました");};
   const moveUp=i=>{if(i===0)return;const a=[...staffList];[a[i-1],a[i]]=[a[i],a[i-1]];onSave(a);};
   const moveDown=i=>{if(i===staffList.length-1)return;const a=[...staffList];[a[i],a[i+1]]=[a[i+1],a[i]];onSave(a);};
+  const toggleColor=i=>{
+    const a=staffList.map((s,idx)=>{
+      if(idx!==i)return s;
+      const cur=sColor(s);
+      return sObj(sName(s),cur==="black"?"red":"black");
+    });
+    onSave(a);
+  };
   return(
     <div>
       <AT>👥 スタッフ登録</AT>
       <AC title="スタッフ一覧">
         {staffList.length===0&&<div style={{fontSize:13,color:"rgba(255,255,255,.35)",marginBottom:12}}>スタッフが登録されていません</div>}
-        {staffList.map((n,i)=>(
+        {staffList.map((s,i)=>{
+          const n=sName(s),col=sColor(s);
+          return(
           <div key={i} style={{display:"flex",alignItems:"center",gap:8,padding:"10px 12px",background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.08)",borderRadius:10,marginBottom:6}}>
             <span style={{fontSize:13,color:"rgba(255,255,255,.4)",minWidth:24,textAlign:"center"}}>{i+1}</span>
+            {/* 色選択ドット */}
+            <button onClick={()=>toggleColor(i)} title={col==="black"?"赤に変更":"黒に変更"}
+              style={{width:14,height:14,borderRadius:"50%",background:col==="red"?"#FF4757":"#FFFFFF",border:`2px solid ${col==="red"?"#FF4757":"rgba(255,255,255,.4)"}`,cursor:"pointer",flexShrink:0,padding:0}}>
+            </button>
             <span style={{flex:1,fontSize:14,color:"white",fontWeight:600}}>{n}</span>
             <button onClick={()=>moveUp(i)} disabled={i===0} style={{padding:"4px 8px",background:"rgba(255,255,255,.08)",border:"none",borderRadius:5,color:"rgba(255,255,255,.6)",fontSize:12,cursor:i===0?"not-allowed":"pointer",opacity:i===0?.3:1}}>↑</button>
             <button onClick={()=>moveDown(i)} disabled={i===staffList.length-1} style={{padding:"4px 8px",background:"rgba(255,255,255,.08)",border:"none",borderRadius:5,color:"rgba(255,255,255,.6)",fontSize:12,cursor:i===staffList.length-1?"not-allowed":"pointer",opacity:i===staffList.length-1?.3:1}}>↓</button>
             <button onClick={()=>del(i)} style={AD}>削除</button>
           </div>
-        ))}
+          );
+        })}
         <div style={{display:"flex",gap:8,marginTop:12}}>
           <input value={newName} onChange={e=>setNewName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()} placeholder="スタッフ名を入力" style={AI}/>
           <button onClick={add} style={AB}>＋ 追加</button>
         </div>
+        <div style={{fontSize:11,color:"rgba(255,255,255,.3)",marginTop:8}}>● をタップすると名前の色を黒/赤で切り替えられます（Excel出力に反映）</div>
       </AC>
     </div>
   );
