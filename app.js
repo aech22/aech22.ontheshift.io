@@ -1111,7 +1111,7 @@ function SmModal({subs,periods,apid,onClose,staffList,onEditSub,onEditByName}){
   const dates=period?gd(period.startDate,period.endDate):[];
   const[editTarget,setEditTarget]=useState(null);
   const submittedNames=submitted.map(s=>s.staffName);
-  const notSubmitted=staffList.filter(n=>!submittedNames.includes(n));
+  const notSubmitted=staffList.filter(s=>!submittedNames.includes(sName(s)));
   const NW=88,CW=86,COMMENT_W=150;
   const handleCellClick=(sub,ds)=>{if(!sub)return;setEditTarget({subId:sub.id,ds});};
   const applyCellEdit=(subId,ds,newStatus,newStart,newEnd)=>{
@@ -1241,20 +1241,9 @@ function SmModal({subs,periods,apid,onClose,staffList,onEditSub,onEditByName}){
                   // 登録スタッフ一覧から選択するダイアログ
                   const names=registeredNames;
                   if(names.length===0){alert("先にスタッフを登録してください");return;}
-                  const choice=window.confirm(`「${n}」を登録スタッフに紐付けますか？
-
-OK→スタッフを選択
-キャンセル→スキップ`);
+                  const choice=window.confirm(`「${n}」を登録スタッフに紐付けますか？\nOK→スタッフを選択 / キャンセル→スキップ`);
                   if(!choice)return;
-                  // 選択リストを表示（prompt）
-                  const idx=window.prompt(
-                    `「${n}」をどのスタッフに紐付けますか？
-
-${names.map((name,i)=>`${i+1}: ${name}`).join("
-")}
-
-番号を入力してください`
-                  );
+                  const idx=window.prompt(`「${n}」をどのスタッフに紐付けますか？\n\n${names.map((name,j)=>`${j+1}: ${name}`).join("\n")}\n\n番号を入力してください`);
                   const num=parseInt(idx);
                   if(isNaN(num)||num<1||num>names.length){return;}
                   const targetName=names[num-1];
@@ -1793,15 +1782,7 @@ function StaffTab({staffList,onSave,subs=[],saveSubs,periods=[],tt}){
                     }
                     return;
                   }
-                  const idx=window.prompt(
-                    `「${n}」をどのスタッフに紐付けますか？
-
-${names.map((name,j)=>`${j+1}: ${name}`).join("
-")}
-${names.length+1}: 新規スタッフとして登録
-
-番号を入力`
-                  );
+                  const idx=window.prompt(`「${n}」をどのスタッフに紐付けますか？\n\n${names.map((name,j)=>`${j+1}: ${name}`).join("\n")}\n${names.length+1}: 新規スタッフとして登録\n\n番号を入力`);
                   const num=parseInt(idx);
                   if(isNaN(num)||num<1||num>names.length+1)return;
                   if(num===names.length+1){
