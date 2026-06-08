@@ -1102,6 +1102,62 @@ function CellEditPanel({sub,s,d,onApply,onClose}){
   );
 }
 
+
+// 未登録スタッフ紐付けパネル（SmModal用）
+function UnlinkPanel({unlinked,registeredNames,submitted,onEditSub}){
+  const[sel,setSel]=useState({});
+  return(
+    <div style={{background:"#FFFBEB",borderTop:"1px solid #FCD34D",padding:"10px 16px",flexShrink:0}}>
+      <div style={{fontSize:12,fontWeight:700,color:"#92400E",marginBottom:8}}>⚠️ スタッフ未登録（{unlinked.length}名）— 登録スタッフと紐付け</div>
+      {unlinked.map((n,i)=>(
+        <div key={i} style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+          <span style={{fontSize:13,color:"#92400E",fontWeight:600,minWidth:80}}>{n}</span>
+          <select value={sel[n]||""} onChange={e=>setSel(s=>({...s,[n]:e.target.value}))}
+            style={{flex:1,padding:"5px 8px",borderRadius:7,border:"1px solid #FCD34D",background:"#FFFBEB",fontSize:13}}>
+            <option value="">-- 選択してください --</option>
+            {registeredNames.map((rn,j)=><option key={j} value={rn}>{rn}</option>)}
+          </select>
+          <button onClick={()=>{
+            const target=sel[n];
+            if(!target)return;
+            submitted.filter(s=>s.staffName===n).forEach(sub=>{
+              onEditSub({...sub,staffName:target,updatedAt:new Date().toISOString(),isUpdated:true});
+            });
+            setSel(s=>({...s,[n]:""}));
+          }} disabled={!sel[n]} style={{padding:"5px 12px",background:sel[n]?"#92400E":"#D1D5DB",border:"none",borderRadius:7,color:"white",fontSize:12,fontWeight:700,cursor:sel[n]?"pointer":"not-allowed"}}>
+            🔗 紐付け
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// スタッフ紐付けセレクト（StaffTab用）
+function StaffLinkSelect({n,registeredNames,staffList,subs,onSave,saveSubs,tt}){
+  const[sel,setSel]=useState("");
+  return(
+    <div style={{display:"flex",gap:6,flex:1,alignItems:"center"}}>
+      <select value={sel} onChange={e=>setSel(e.target.value)}
+        style={{flex:1,padding:"5px 8px",borderRadius:7,border:"1px solid rgba(253,211,77,.4)",background:"rgba(253,211,77,.08)",color:"#FCD34D",fontSize:12}}>
+        <option value="">-- 既存スタッフに紐付け --</option>
+        {registeredNames.map((rn,j)=><option key={j} value={rn}>{rn}</option>)}
+      </select>
+      <button onClick={()=>{
+        if(!sel)return;
+        const newSubs=subs.map(s=>s.staffName===n?{...s,staffName:sel,updatedAt:new Date().toISOString(),isUpdated:true}:s);
+        saveSubs(newSubs);tt("✅ 紐付けました");setSel("");
+      }} disabled={!sel} style={{padding:"5px 10px",background:sel?"rgba(253,211,77,.2)":"rgba(255,255,255,.05)",border:"1px solid rgba(253,211,77,.3)",borderRadius:7,color:"#FCD34D",fontSize:12,fontWeight:700,cursor:sel?"pointer":"not-allowed"}}>
+        🔗
+      </button>
+      <button onClick={()=>{onSave([...staffList,sObj(n,"black")]);tt("✅ 新規登録しました");}}
+        style={{padding:"5px 10px",background:"rgba(255,255,255,.05)",border:"none",borderRadius:7,color:"rgba(255,255,255,.5)",fontSize:12,cursor:"pointer"}}>
+        ＋登録
+      </button>
+    </div>
+  );
+}
+
 // ============================================================
 // 提出状況モーダル（全画面・名前固定・横スクロール）
 // ============================================================
@@ -1233,31 +1289,7 @@ function SmModal({subs,periods,apid,onClose,staffList,onEditSub,onEditByName}){
               {notSubmitted.map((n,i)=><span key={i} style={{fontSize:12,background:"#FFF0F1",color:"#FF4757",border:"1px solid rgba(255,71,87,.2)",padding:"3px 10px",borderRadius:20,fontWeight:600}}>{sName(n)}</span>)}
             </div>
           </div>}
-          {unlinked.length>0&&<div style={{background:"#FFFBEB",borderTop:"1px solid #FCD34D",padding:"10px 16px",flexShrink:0}}>
-            <div style={{fontSize:12,fontWeight:700,color:"#92400E",marginBottom:6}}>⚠️ スタッフ未登録（{unlinked.length}名）— タップしてスタッフと紐付け</div>
-            <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-              {unlinked.map((n,i)=>(
-                <button key={i} onClick={()=>{
-                  // 登録スタッフ一覧から選択するダイアログ
-                  const names=registeredNames;
-                  if(names.length===0){alert("先にスタッフを登録してください");return;}
-                  const choice=window.confirm(`「${n}」を登録スタッフに紐付けますか？\nOK→スタッフを選択 / キャンセル→スキップ`);
-                  if(!choice)return;
-                  const idx=window.prompt(`「${n}」をどのスタッフに紐付けますか？\n\n${names.map((name,j)=>`${j+1}: ${name}`).join("\n")}\n\n番号を入力してください`);
-                  const num=parseInt(idx);
-                  if(isNaN(num)||num<1||num>names.length){return;}
-                  const targetName=names[num-1];
-                  // 該当するsubsのstaffNameを変更
-                  const toUpdate=submitted.filter(s=>s.staffName===n);
-                  toUpdate.forEach(sub=>{onEditSub({...sub,staffName:targetName,updatedAt:new Date().toISOString(),isUpdated:true});});
-                  alert(`✅ 「${n}」→「${targetName}」に紐付けました`);
-                }}
-                style={{fontSize:12,background:"#FEF3C7",color:"#92400E",border:"1px solid #FCD34D",padding:"4px 12px",borderRadius:20,fontWeight:600,cursor:"pointer"}}>
-                  {n} 🔗
-                </button>
-              ))}
-            </div>
-          </div>}
+          {unlinked.length>0&&<UnlinkPanel unlinked={unlinked} registeredNames={registeredNames} submitted={submitted} onEditSub={onEditSub}/>}
         </>);
       })()}
     </div>
@@ -1771,38 +1803,7 @@ function StaffTab({staffList,onSave,subs=[],saveSubs,periods=[],tt}){
             {unlinked.map((n,i)=>(
               <div key={i} style={{display:"flex",alignItems:"center",gap:8,padding:"10px 12px",background:"rgba(253,211,77,.08)",border:"1px solid rgba(253,211,77,.2)",borderRadius:10,marginBottom:6}}>
                 <span style={{flex:1,fontSize:14,color:"#FCD34D",fontWeight:600}}>{n}</span>
-                <button onClick={()=>{
-                  // 登録スタッフ一覧から選択
-                  const names=registeredNames;
-                  if(names.length===0){
-                    // 登録スタッフがいない場合は新規登録
-                    if(window.confirm(`「${n}」をスタッフとして新規登録しますか？`)){
-                      onSave([...staffList,sObj(n,"black")]);
-                      tt(`✅「${n}」を登録しました`);
-                    }
-                    return;
-                  }
-                  const idx=window.prompt(`「${n}」をどのスタッフに紐付けますか？\n\n${names.map((name,j)=>`${j+1}: ${name}`).join("\n")}\n${names.length+1}: 新規スタッフとして登録\n\n番号を入力`);
-                  const num=parseInt(idx);
-                  if(isNaN(num)||num<1||num>names.length+1)return;
-                  if(num===names.length+1){
-                    // 新規登録
-                    onSave([...staffList,sObj(n,"black")]);
-                    tt(`✅「${n}」をスタッフとして登録しました`);
-                    return;
-                  }
-                  const targetName=names[num-1];
-                  // subsのstaffNameを一括変更
-                  const newSubs=subs.map(s=>s.staffName===n?{...s,staffName:targetName,updatedAt:new Date().toISOString(),isUpdated:true}:s);
-                  saveSubs(newSubs);
-                  tt(`✅「${n}」→「${targetName}」に紐付けました`);
-                }} style={{padding:"6px 12px",background:"rgba(253,211,77,.15)",border:"1px solid rgba(253,211,77,.3)",borderRadius:8,color:"#FCD34D",fontSize:12,fontWeight:700,cursor:"pointer"}}>🔗 紐付け</button>
-                <button onClick={()=>{
-                  if(window.confirm(`「${n}」をスタッフとして新規登録しますか？`)){
-                    onSave([...staffList,sObj(n,"black")]);
-                    tt(`✅「${n}」を登録しました`);
-                  }
-                }} style={{padding:"6px 12px",background:"rgba(255,255,255,.08)",border:"none",borderRadius:8,color:"rgba(255,255,255,.6)",fontSize:12,cursor:"pointer"}}>＋ 新規登録</button>
+                <StaffLinkSelect n={n} registeredNames={registeredNames} staffList={staffList} subs={subs} onSave={onSave} saveSubs={saveSubs} tt={tt}/>
               </div>
             ))}
           </AC>
